@@ -43,12 +43,14 @@ robot.
 | `cdr.py` | CDR encoding, so an Axol reaches the fabric looking like a ROS rig |
 | `fake.py` | a robot that exists only in memory, for the suite and `--fake` |
 | `service.py` | the Zenoh session and the queryable, and nothing else |
+| `client.py` | `fm robot`: a device name and a verb become one query |
 
 ## Use
 
 ```bash
 uv run fm-robot-agent            # read this host's card, serve its robot
 uv run fm-robot-agent --fake     # a robot in memory, for a bench run
+uv run fm-robot list             # ask the fabric which robots are up
 ```
 
 ## Test

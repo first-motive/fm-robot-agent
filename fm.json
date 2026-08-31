@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "commands": {
+    "robot": {
+      "script": "scripts/run/robot.sh",
+      "help": "drive a robot over the fleet fabric: status | up | down | mode | record | stop | episodes"
+    }
+  }
+}

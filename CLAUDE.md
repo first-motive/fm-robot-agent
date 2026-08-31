@@ -27,3 +27,5 @@ uv run --extra dev pytest
 - `agent/` — the HTTP agent this repo was seeded from, pending the Zenoh port
 - `src/fm_robot_agent/` — the Zenoh agent: verb router, adapters, service (steps 2-5)
 - `tests/` — the suite, which needs no router and no robot
+- `scripts/run/` — the verbs `fm` mounts through `fm.json`
+- `systemd/` — the unit template `install.sh` renders

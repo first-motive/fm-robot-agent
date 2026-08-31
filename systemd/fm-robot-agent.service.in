@@ -1,0 +1,23 @@
+# fm-robot-agent — this robot's control verbs, served over Zenoh.
+#
+# Rendered by install.sh: @USER@ and @WORKDIR@ are replaced with the account and
+# checkout the installer found. Not a template anyone edits by hand — edit this
+# file and re-run the installer.
+[Unit]
+Description=fm-robot-agent: this robot's control verbs over Zenoh
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=@USER@
+WorkingDirectory=@WORKDIR@
+# The fleet-wide facts — the router endpoint above all — come from the same file
+# every other First Motive unit reads. Nothing about the fleet is written twice.
+EnvironmentFile=/etc/fm-comms.env
+ExecStart=@UV@ run --project @WORKDIR@ fm-robot-agent
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

@@ -26,6 +26,8 @@ dependencies = [
 
 [project.scripts]
 fm-robot-agent = "fm_robot_agent.service:main"
+# The CLI half. `fm robot` reaches it through scripts/run/robot.sh.
+fm-robot = "fm_robot_agent.client:main"
 
 
 [project.optional-dependencies]
