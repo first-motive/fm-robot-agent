@@ -36,6 +36,8 @@ robot.
 | `verbs.py` | key → adapter call → reply, as one pure function |
 | `card.py` | this host's identity card: name, namespace, robot kind |
 | `env.py` | the router endpoint, from the environment or `/etc/fm-comms.env` |
+| `anvil.py` | the Anvil workcell: compose, the webapp's tRPC lane, ros2 services |
+| `trpc.py` | the webapp's tRPC-over-WebSocket protocol, the two call shapes |
 | `fake.py` | a robot that exists only in memory, for the suite and `--fake` |
 | `service.py` | the Zenoh session and the queryable, and nothing else |
 

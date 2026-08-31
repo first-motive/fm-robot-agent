@@ -18,6 +18,10 @@ license = { text = "Apache-2.0" }
 authors = [{ name = "First Motive", email = "nish@ubundi.co.za" }]
 dependencies = [
     "eclipse-zenoh>=1.9.0,<1.10",
+    # The Anvil webapp speaks tRPC over a WebSocket and nothing else, and the
+    # standard library has no WebSocket client. This is the smallest one that
+    # offers a synchronous API, which is what the agent needs.
+    "websockets>=13",
 ]
 
 [project.scripts]

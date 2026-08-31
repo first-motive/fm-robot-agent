@@ -18,6 +18,8 @@ import json
 import signal
 import sys
 
+from fm_robot_agent.anvil import KIND as ANVIL_KIND
+from fm_robot_agent.anvil import AnvilAdapter
 from fm_robot_agent.card import CardError, RobotCard, read_card
 from fm_robot_agent.env import EndpointError, router_endpoint
 from fm_robot_agent.fake import FakeAdapter
@@ -26,7 +28,7 @@ from fm_robot_agent.verbs import KEY_PREFIX, answer
 
 #: Which adapter drives which card kind. The adapters land one per robot; the
 #: fake is what ``--fake`` serves and what the suite drives.
-ADAPTERS = {"fake": FakeAdapter}
+ADAPTERS = {"fake": FakeAdapter, ANVIL_KIND: AnvilAdapter}
 
 
 def build_adapter(kind: str) -> RobotAdapter:
