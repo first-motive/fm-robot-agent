@@ -1,0 +1,7 @@
+# CODEOWNERS — default reviewers for this repo.
+#
+# Governance model: owner-free-on-main (see CONTRIBUTING.md).
+#   - Owners push to main directly (no PR required).
+#   - Everyone else branches, opens a PR, an owner reviews and merges.
+
+* @ubunish @RetiefLouw

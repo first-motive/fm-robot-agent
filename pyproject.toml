@@ -1,0 +1,32 @@
+# fm-robot-agent — the host-side agent that makes a robot a First Motive device.
+#
+# Its own uv project, not a workspace member: it runs on the robot's host beside
+# the vendor's stack, outside any ROS environment, and rosdep has no zenoh
+# package to give it.
+#
+# The zenoh wheel is pinned to the same 1.9.x line as fm-comms' zenoh/zenoh.version.
+# An agent that speaks a different protocol version than the router is exactly the
+# split the single pin exists to prevent.
+
+[project]
+name = "fm-robot-agent"
+version = "0.1.0"
+description = "Serve a First Motive robot's control verbs over Zenoh"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+authors = [{ name = "First Motive", email = "nish@ubundi.co.za" }]
+dependencies = [
+    "eclipse-zenoh>=1.9.0,<1.10",
+]
+
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/fm_robot_agent"]

@@ -1,0 +1,16 @@
+[Unit]
+Description=fm-anvil-agent: host-side control agent for the Anvil workcell
+Documentation=https://github.com/first-motive/anvil-loader
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=anvil
+Environment=FM_ANVIL_LOADER_DIR=/home/anvil/anvil-loader
+ExecStart=/usr/bin/python3 /home/anvil/anvil-loader/agent/fm_agent.py
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

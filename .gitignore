@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+dist/
+build/
+*.egg-info/
+.venv/
+
+# Planning artifacts (working files, not committed history)
+plans/
+.DS_Store
