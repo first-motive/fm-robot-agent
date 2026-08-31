@@ -20,6 +20,7 @@ flowchart LR
     V --> A[RobotAdapter]
     A --> AN[anvil adapter<br/>docker compose + tRPC]
     A --> AX[axol adapter<br/>localhost:8001]
+    AX -->|CDR JointState| P[publisher<br/>ns/joint_states] --> R
     C[card.py] -.->|namespace, kind| S
     E[env.py] -.->|router endpoint| S
 ```
@@ -38,6 +39,8 @@ robot.
 | `env.py` | the router endpoint, from the environment or `/etc/fm-comms.env` |
 | `anvil.py` | the Anvil workcell: compose, the webapp's tRPC lane, ros2 services |
 | `trpc.py` | the webapp's tRPC-over-WebSocket protocol, the two call shapes |
+| `axol.py` | the Almond Axol: its FastAPI server, and its telemetry as JointState |
+| `cdr.py` | CDR encoding, so an Axol reaches the fabric looking like a ROS rig |
 | `fake.py` | a robot that exists only in memory, for the suite and `--fake` |
 | `service.py` | the Zenoh session and the queryable, and nothing else |
 

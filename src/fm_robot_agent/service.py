@@ -17,18 +17,21 @@ import argparse
 import json
 import signal
 import sys
+import threading
 
 from fm_robot_agent.anvil import KIND as ANVIL_KIND
 from fm_robot_agent.anvil import AnvilAdapter
+from fm_robot_agent.axol import KIND as AXOL_KIND
+from fm_robot_agent.axol import AxolAdapter
 from fm_robot_agent.card import CardError, RobotCard, read_card
 from fm_robot_agent.env import EndpointError, router_endpoint
 from fm_robot_agent.fake import FakeAdapter
-from fm_robot_agent.protocol import RobotAdapter
+from fm_robot_agent.protocol import AdapterError, RobotAdapter
 from fm_robot_agent.verbs import KEY_PREFIX, answer
 
 #: Which adapter drives which card kind. The adapters land one per robot; the
 #: fake is what ``--fake`` serves and what the suite drives.
-ADAPTERS = {"fake": FakeAdapter, ANVIL_KIND: AnvilAdapter}
+ADAPTERS = {"fake": FakeAdapter, ANVIL_KIND: AnvilAdapter, AXOL_KIND: AxolAdapter}
 
 
 def build_adapter(kind: str) -> RobotAdapter:
@@ -79,6 +82,38 @@ def _handler(adapter: RobotAdapter, namespace: str):
     return handle
 
 
+#: How long to wait before reopening a telemetry stream that dropped. The Axol's
+#: server restarts on its own updates, and a robot that goes quiet for a minute
+#: after one is worse than a reconnect that costs nothing.
+TELEMETRY_RETRY_S = 2.0
+
+
+def publish_telemetry(session, adapter: RobotAdapter, namespace: str, stop: threading.Event) -> None:
+    """Forward an adapter's telemetry onto the fabric until asked to stop.
+
+    Only the Axol has a stream to forward — the Anvil's telemetry crosses through
+    ``zenoh-bridge-ros2dds`` without passing through this process at all. So this
+    runs only for an adapter that offers one, rather than the protocol demanding
+    a stream every robot must have.
+    """
+    publishers: dict[str, object] = {}
+    while not stop.is_set():
+        try:
+            for topic, payload in adapter.telemetry():
+                if stop.is_set():
+                    return
+                if topic not in publishers:
+                    publishers[topic] = session.declare_publisher(f"{namespace}/{topic}")
+                publishers[topic].put(payload)
+        except AdapterError as exc:
+            print(f"fm-robot-agent: telemetry stopped: {exc}", file=sys.stderr, flush=True)
+        # A telemetry stream that dies must never take the verb set down with it,
+        # and the socket library raises its own exception family on a drop.
+        except Exception as exc:  # noqa: BLE001
+            print(f"fm-robot-agent: telemetry dropped: {exc}", file=sys.stderr, flush=True)
+        stop.wait(TELEMETRY_RETRY_S)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Serve this robot's control verbs over Zenoh.",
@@ -116,9 +151,20 @@ def main(argv: list[str] | None = None) -> int:
     with zenoh.open(_session_config(endpoint)) as session:
         session.declare_queryable(key, _handler(adapter, namespace))
         print(f"fm-robot-agent: serving {key} as {card.kind} via {endpoint}", flush=True)
+
+        stop = threading.Event()
+        if hasattr(adapter, "telemetry"):
+            threading.Thread(
+                target=publish_telemetry,
+                args=(session, adapter, namespace, stop),
+                name="telemetry",
+                daemon=True,
+            ).start()
+            print(f"fm-robot-agent: publishing {namespace}/joint_states", flush=True)
         # Nothing else to do on this thread; Zenoh runs the handler. Wait for the
         # signal systemd sends on stop rather than spinning.
         signal.sigwait({signal.SIGINT, signal.SIGTERM})
+        stop.set()
     print("fm-robot-agent: stopped", flush=True)
     return 0
 
