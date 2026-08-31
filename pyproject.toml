@@ -20,6 +20,9 @@ dependencies = [
     "eclipse-zenoh>=1.9.0,<1.10",
 ]
 
+[project.scripts]
+fm-robot-agent = "fm_robot_agent.service:main"
+
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "ruff"]
@@ -30,3 +33,9 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/fm_robot_agent"]
+
+[tool.ruff]
+# agent/ is the HTTP agent imported verbatim off the devbox as provenance. It is
+# deleted once the Zenoh agent replaces it; linting a frozen copy only produces
+# findings nobody may act on.
+exclude = ["agent"]
