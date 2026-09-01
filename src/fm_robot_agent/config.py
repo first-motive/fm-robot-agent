@@ -163,3 +163,33 @@ def restore(files: dict) -> list[str]:
         except OSError:
             continue
     return restored
+
+
+def env_values(text: str) -> dict[str, str]:
+    """The assignments in an env file, in the order they appear.
+
+    Both files a paired write touches are ``KEY=value`` lines read by systemd and
+    by docker compose, and neither expands anything. The last assignment wins,
+    which is what the readers themselves do.
+    """
+    values: dict[str, str] = {}
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        key, _, value = stripped.partition("=")
+        values[key.strip()] = value.strip()
+    return values
+
+
+def env_replaced(text: str, key: str, value: str) -> str:
+    """``text`` with ``key`` assigned ``value`` exactly once.
+
+    Every other line survives byte for byte — the file belongs to the vendor and
+    carries comments an operator reads. A key that was commented out stays
+    commented out and gains a live assignment below, because uncommenting a line
+    would change what the file says about why it was off.
+    """
+    lines = [line for line in text.splitlines() if not line.strip().startswith(f"{key}=")]
+    lines.append(f"{key}={value}")
+    return "\n".join(lines) + "\n"

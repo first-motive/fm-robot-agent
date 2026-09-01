@@ -8,12 +8,14 @@ about how it is wired together.
 from __future__ import annotations
 
 import json
+import os
 import shlex
 import subprocess
 
 import pytest
 
 from fm_robot_agent.anvil import KIND, MODE_KEY, AnvilAdapter
+from fm_robot_agent.config import MODE, MOTION, SEVERING, TUNING
 from fm_robot_agent.protocol import AdapterError
 
 RECORDING_RESPONSE = (
@@ -60,7 +62,14 @@ def loader(tmp_path):
         "task: pick\n", encoding="utf-8"
     )
     (tmp_path / ".env.config").write_text(
-        f"ROS_DOMAIN_ID=1\n{MODE_KEY}=openarm_v2_leader_only.yaml\nENABLE_CYCLONEDDS=true\n",
+        "# the vendor's own comment, which a write must not eat\n"
+        f"ROS_DOMAIN_ID=1\n{MODE_KEY}=openarm_v2_leader_only.yaml\nENABLE_CYCLONEDDS=true\n"
+        "CYCLONEDDS_IFACE=wlp8s0\nCYCLONEDDS_VERBOSITY=warning\n"
+        "TELEOP_POSITION_SCALE=1.0\nANVIL_SOMETHING_NEW=whatever\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "fm-comms.env").write_text(
+        "FM_ROUTER_ENDPOINT=tcp/router:7447\nFM_ROS_DOMAIN_ID=0\nROS_DOMAIN_ID=0\n",
         encoding="utf-8",
     )
     return tmp_path
@@ -68,7 +77,7 @@ def loader(tmp_path):
 
 @pytest.fixture
 def adapter(loader, monkeypatch):
-    robot = AnvilAdapter(loader_dir=loader)
+    robot = AnvilAdapter(loader_dir=loader, comms_env=loader / "fm-comms.env")
     robot.webapp = WebappStub()
 
     def fake_run(argv, **kwargs):
@@ -309,3 +318,133 @@ def test_an_env_supplied_rmw_cannot_extend_the_command(adapter, monkeypatch):
     monkeypatch.setattr("fm_robot_agent.anvil.RMW", "rmw_x; id")
     called = _service_command(adapter, monkeypatch)
     assert "RMW_IMPLEMENTATION='rmw_x; id'" in called
+
+
+# --- config ------------------------------------------------------------------
+
+
+def settings(adapter) -> dict:
+    return {setting.key: setting for setting in adapter.config_read()}
+
+
+def test_config_read_comes_from_the_robots_own_file(adapter):
+    """Anvil version-controls `.env.config`; a key list held here would go stale."""
+    listed = settings(adapter)
+    assert listed["ROS_DOMAIN_ID"].klass == SEVERING
+    assert listed["TELEOP_POSITION_SCALE"].klass == MOTION
+    assert listed["CYCLONEDDS_VERBOSITY"].klass == TUNING
+    assert listed[MODE_KEY].klass == MODE
+
+
+def test_the_mode_keys_options_are_the_configs_on_disk(adapter):
+    assert settings(adapter)[MODE_KEY].options == (
+        "openarm_v2_leader_only.yaml",
+        "openarm_v2_quest_teleop.yaml",
+    )
+
+
+def test_an_unclassified_key_is_listed_and_refused(adapter, loader):
+    """`.env.config` is an env_file for a privileged container."""
+    assert settings(adapter)["ANVIL_SOMETHING_NEW"].writable is False
+    outcome = adapter.config_write("ANVIL_SOMETHING_NEW", "anything")
+    assert outcome.ok is False
+    assert "whatever" in (loader / ".env.config").read_text()
+
+
+def test_a_tuning_key_is_written_without_recreating_the_stack(adapter, loader):
+    outcome = adapter.config_write("CYCLONEDDS_VERBOSITY", "fine")
+    assert outcome.ok is True
+    assert "CYCLONEDDS_VERBOSITY=fine" in (loader / ".env.config").read_text()
+    assert adapter.launched == []
+
+
+def test_a_write_keeps_every_other_line(adapter, loader):
+    adapter.config_write("CYCLONEDDS_VERBOSITY", "fine")
+    written = (loader / ".env.config").read_text()
+    assert "# the vendor's own comment, which a write must not eat" in written
+    assert "ENABLE_CYCLONEDDS=true" in written
+
+
+@pytest.mark.parametrize(
+    ("key", "value"),
+    [
+        ("ROS_DOMAIN_ID", "999"),
+        ("ROS_DOMAIN_ID", "one"),
+        ("CYCLONEDDS_IFACE", "not an interface"),
+        ("CYCLONEDDS_VERBOSITY", "loud"),
+        ("CYCLONEDDS_TRANSPORT", "carrier-pigeon"),
+        ("ENABLE_CYCLONEDDS", "yes"),
+        ("CYCLONEDDS_PEER_IP", "300.1.1.1"),
+        ("TELEOP_POSITION_SCALE", "-1"),
+        (MODE_KEY, "openarm_v2_quest_teleop.yaml.evil"),
+    ],
+)
+def test_a_value_the_key_cannot_hold_is_refused(adapter, loader, key, value):
+    before = (loader / ".env.config").read_text()
+    assert adapter.config_write(key, value).ok is False
+    assert (loader / ".env.config").read_text() == before
+
+
+def test_a_motion_key_is_refused_while_the_stack_is_up(adapter, loader):
+    outcome = adapter.config_write("TELEOP_POSITION_SCALE", "1.5")
+    assert outcome.ok is False
+    assert "TELEOP_POSITION_SCALE=1.0" in (loader / ".env.config").read_text()
+
+
+def test_a_motion_key_is_written_once_the_stack_is_down(adapter, loader, monkeypatch):
+    monkeypatch.setattr(adapter, "compose_ps", list)
+    assert adapter.config_write("TELEOP_POSITION_SCALE", "1.5").ok is True
+    assert "TELEOP_POSITION_SCALE=1.5" in (loader / ".env.config").read_text()
+
+
+def test_a_severing_key_recreates_the_stack(adapter):
+    assert adapter.config_write("CYCLONEDDS_IFACE", "eth0").ok is True
+    assert adapter.launched and "--force-recreate" in adapter.launched[0]
+
+
+# --- the paired write --------------------------------------------------------
+
+
+def test_the_domain_lands_in_both_files(adapter, loader):
+    """A bridge left on the fleet's domain while the stack moved is defect #2."""
+    assert adapter.config_write("ROS_DOMAIN_ID", "7").ok is True
+    comms = (loader / "fm-comms.env").read_text()
+    assert "FM_ROS_DOMAIN_ID=7" in comms
+    assert "ROS_DOMAIN_ID=7" in comms
+    assert "ROS_DOMAIN_ID=7" in (loader / ".env.config").read_text()
+
+
+def test_the_interface_lands_in_both_files(adapter, loader):
+    assert adapter.config_write("CYCLONEDDS_IFACE", "eth0").ok is True
+    assert "FM_DDS_IFACE=eth0" in (loader / "fm-comms.env").read_text()
+
+
+def test_an_unpaired_key_leaves_the_fleet_file_alone(adapter, loader):
+    before = (loader / "fm-comms.env").read_text()
+    adapter.config_write("CYCLONEDDS_VERBOSITY", "fine")
+    assert (loader / "fm-comms.env").read_text() == before
+
+
+def test_a_write_that_fails_on_the_second_file_leaves_the_first_unchanged(
+    adapter, loader, monkeypatch
+):
+    """Half a paired write is exactly the disagreement the pairing exists to stop."""
+    before = (loader / ".env.config").read_text()
+    real_replace = os.replace
+
+    def fail_on_the_fleet_file(src, dst):
+        if str(dst).endswith("fm-comms.env"):
+            raise OSError("read-only file system")
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(os, "replace", fail_on_the_fleet_file)
+    with pytest.raises(AdapterError):
+        adapter.config_write("ROS_DOMAIN_ID", "7")
+    monkeypatch.undo()
+    assert (loader / ".env.config").read_text() == before
+
+
+def test_a_host_with_no_fleet_file_still_writes_its_own(adapter, loader):
+    (loader / "fm-comms.env").unlink()
+    assert adapter.config_write("ROS_DOMAIN_ID", "7").ok is True
+    assert not (loader / "fm-comms.env").exists()
