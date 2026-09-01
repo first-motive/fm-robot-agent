@@ -170,3 +170,56 @@ def test_an_unreachable_robot_replies_with_the_reason():
     reply = answer(key("status"), UnreachableRobot(), NS)
     assert reply.ok is False
     assert body(reply)["error"] == "robot did not answer"
+
+
+# --- discovery ---------------------------------------------------------------
+
+
+def test_a_discovery_query_is_answered():
+    """`fm/robot/*/status` is how a caller finds robots it cannot name yet."""
+    assert verb_of(f"{KEY_PREFIX}/*/status", NS) == "status"
+
+
+def test_a_discovery_query_still_only_answers_known_verbs():
+    assert verb_of(f"{KEY_PREFIX}/*/reboot", NS) is None
+
+
+def test_another_robots_namespace_is_still_refused():
+    assert verb_of(key("status", "fm_rob_02"), NS) is None
+
+
+def test_a_partial_namespace_is_not_a_wildcard():
+    """Only a bare `*` discovers; a glob against our name is somebody guessing."""
+    assert verb_of(f"{KEY_PREFIX}/fm_rob_*/status", NS) is None
+
+
+def test_a_key_with_extra_segments_is_refused():
+    assert verb_of(f"{KEY_PREFIX}/{NS}/status/extra", NS) is None
+    assert verb_of(f"other/robot/{NS}/status", NS) is None
+
+
+def test_a_reply_names_the_robot_that_answered_not_the_query(robot):
+    """A discovery reply echoing the selector back would identify nobody."""
+    reply = answer(f"{KEY_PREFIX}/*/status", robot, NS)
+    assert reply.key == f"{KEY_PREFIX}/{NS}/status"
+    assert body(reply)["kind"] == "fake"
+
+
+def test_a_named_query_still_replies_under_that_name(robot):
+    assert answer(key("status"), robot, NS).key == f"{KEY_PREFIX}/{NS}/status"
+
+
+@pytest.mark.parametrize("verb", ["up", "down", "mode", "record", "stop"])
+def test_a_wildcard_discovers_but_never_commands(verb):
+    """`fm/robot/*/down` would otherwise take the whole fleet down in one query."""
+    assert verb_of(f"{KEY_PREFIX}/*/{verb}", NS) is None
+
+
+@pytest.mark.parametrize("verb", ["status", "episodes"])
+def test_a_wildcard_still_reads(verb):
+    assert verb_of(f"{KEY_PREFIX}/*/{verb}", NS) == verb
+
+
+@pytest.mark.parametrize("verb", ["up", "down", "mode", "record", "stop"])
+def test_a_named_query_still_commands(verb):
+    assert verb_of(key(verb), NS) == verb

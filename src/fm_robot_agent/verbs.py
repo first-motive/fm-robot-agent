@@ -93,18 +93,35 @@ def _body(payload: bytes | None) -> dict:
     return decoded if isinstance(decoded, dict) else {}
 
 
+#: The namespace segment of a discovery query. A caller that does not yet know
+#: which robots exist cannot name one, so the fabric answers for all of them —
+#: this is how `fm robot list` and the desktop find robots with no hostname and
+#: no registry. Every other segment must match this agent's own namespace.
+DISCOVERY_SEGMENT = "*"
+
+
 def verb_of(key: str, namespace: str) -> str | None:
     """The verb a key names, or ``None`` when the key is not ours.
 
-    The namespace is checked here rather than trusted from the key expression:
-    one agent serves one robot, and answering under another robot's namespace
-    would put two agents in a race the caller cannot see.
+    The namespace is checked rather than trusted: one agent serves one robot, and
+    answering under another robot's namespace would put two agents in a race the
+    caller cannot see. A wildcard is the one exception, and only for a read:
+    every agent answers such a query for itself alone, under its own key.
     """
-    expected = f"{KEY_PREFIX}/{namespace}/"
-    if not key.startswith(expected):
+    parts = key.split("/")
+    if len(parts) != 4 or "/".join(parts[:2]) != KEY_PREFIX:
         return None
-    verb = key[len(expected):]
-    return verb if verb in VERBS else None
+    queried_namespace, verb = parts[2], parts[3]
+    if verb not in VERBS:
+        return None
+    if queried_namespace == namespace:
+        return verb
+    # A wildcard discovers; it does not command. A caller that cannot name a
+    # robot has no business changing one, and `fm/robot/*/down` would otherwise
+    # take the whole fleet down in a single query.
+    if queried_namespace == DISCOVERY_SEGMENT and verb in READ_VERBS:
+        return verb
+    return None
 
 
 def answer(
@@ -119,6 +136,11 @@ def answer(
     verb = verb_of(key, namespace)
     if verb is None:
         return _refuse(key, f"unknown key {key!r}")
+
+    # Every reply carries this robot's own key, never the selector that asked.
+    # A discovery query names no robot, so a reply echoing it back would leave
+    # the caller unable to tell which robot answered.
+    key = f"{KEY_PREFIX}/{namespace}/{verb}"
 
     body = _body(payload)
     try:
