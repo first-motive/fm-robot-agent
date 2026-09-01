@@ -306,15 +306,17 @@ class AnvilAdapter:
             return Outcome(
                 ok=False,
                 message=f"{key} is not a key this agent classifies, so it is read-only",
+                detail={"key": key, "class": UNKNOWN},
             )
         try:
             value = self._validated(key, value)
         except ConfigError as exc:
-            return Outcome(ok=False, message=str(exc))
+            return Outcome(ok=False, message=str(exc), detail={"key": key, "class": klass})
         if klass == MOTION and self._stack_running():
             return Outcome(
                 ok=False,
                 message=f"{key} shapes motion and the stack is up; take it down first",
+                detail={"key": key, "class": klass},
             )
         if klass == SEVERING:
             return self._write_severing(key, value)

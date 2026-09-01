@@ -8,6 +8,7 @@ import json
 import pytest
 
 from fm_robot_agent import client
+from fm_robot_agent.config import MODE_ALIAS
 
 
 def args(**overrides) -> argparse.Namespace:
@@ -23,10 +24,14 @@ def test_verbs_without_a_body_send_none(verb):
     assert client.build_payload(verb, args()) is None
 
 
-def test_mode_sends_its_config():
+def test_mode_is_sugar_over_a_config_write():
+    """`mode` predates the config verb; the adapter resolves the alias to its key."""
     assert client.build_payload("mode", args(value="openarm_v2_quest_teleop.yaml")) == {
-        "config": "openarm_v2_quest_teleop.yaml"
+        "action": "set",
+        "key": MODE_ALIAS,
+        "value": "openarm_v2_quest_teleop.yaml",
     }
+    assert client.wire_verb("mode") == "config"
 
 
 def test_record_defaults_to_starting():
@@ -51,6 +56,9 @@ def test_record_stop_is_explicit():
         ["fm-rob-01", "record", "start"],   # record without a dataset
         ["fm-rob-01", "episodes"],          # episodes without a dataset
         ["fm-rob-01", "reboot"],            # a verb the contract has no key for
+        ["fm-rob-01", "config", "reboot"],  # an action config does not have
+        ["fm-rob-01", "config", "set"],     # set without KEY=VALUE
+        ["fm-rob-01", "config", "set", "CYCLONEDDS_VERBOSITY"],  # no value
     ],
 )
 def test_incomplete_invocations_are_refused_before_any_session_opens(argv):
@@ -106,3 +114,54 @@ def test_a_refusal_is_printed_with_its_reason(capsys):
 def test_the_schema_stamp_is_not_shown_to_a_person(capsys):
     client.render([{"schema_version": 1, "ok": True, "mode": "teleop"}], as_json=False)
     assert "schema_version" not in capsys.readouterr().out
+
+
+# --- config ------------------------------------------------------------------
+
+
+def test_config_defaults_to_reading():
+    assert client.build_payload("config", args()) == {"action": "get"}
+
+
+def test_config_set_splits_the_assignment():
+    assert client.build_payload("config", args(value="set", assignment="ROS_DOMAIN_ID=7")) == {
+        "action": "set",
+        "key": "ROS_DOMAIN_ID",
+        "value": "7",
+    }
+
+
+def test_config_rollback_carries_nothing_else():
+    assert client.build_payload("config", args(value="rollback")) == {"action": "rollback"}
+
+
+def test_config_get_prints_a_line_per_key_with_its_class(capsys):
+    client.render(
+        [
+            {
+                "schema_version": 1,
+                "ok": True,
+                "config": [
+                    {"key": "ROS_DOMAIN_ID", "value": "1", "class": "severing", "writable": True},
+                    {"key": "ANVIL_NEW", "value": "x", "class": "unknown", "writable": False},
+                ],
+            }
+        ],
+        as_json=False,
+    )
+    printed = capsys.readouterr().out.splitlines()
+    assert printed[0] == "ROS_DOMAIN_ID=1  [severing]"
+    assert printed[1] == "ANVIL_NEW=x  [unknown]  read-only"
+
+
+def test_a_refusal_names_the_guard_that_refused_it(capsys):
+    client.render(
+        [{"ok": False, "message": "the stack is up", "class": "motion"}],
+        as_json=False,
+    )
+    assert capsys.readouterr().out.strip() == "refused (motion): the stack is up"
+
+
+def test_a_config_write_waits_longer_than_any_other_verb():
+    """A severing write is answered only once telemetry has come back."""
+    assert client.CONFIG_TIMEOUT_S > client.QUERY_TIMEOUT_S

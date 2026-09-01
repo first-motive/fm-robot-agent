@@ -41,6 +41,7 @@ from fm_robot_agent.config import (
     MODE_ALIAS,
     MOTION,
     TUNING,
+    UNKNOWN,
     Setting,
 )
 from fm_robot_agent.protocol import AdapterError, Outcome
@@ -264,7 +265,7 @@ class AxolAdapter:
             try:
                 typed = _typed(field, value)
             except ValueError as exc:
-                return Outcome(ok=False, message=str(exc))
+                return Outcome(ok=False, message=str(exc), detail={"key": key, "class": klass})
             self._put("/api/settings", {"values": {key: typed}})
             return Outcome(
                 ok=True,
@@ -284,7 +285,11 @@ class AxolAdapter:
                 detail={"key": key, "value": typed, "class": ADVANCED_CLASS},
             )
 
-        return Outcome(ok=False, message=f"{key} is not a setting this robot has")
+        return Outcome(
+            ok=False,
+            message=f"{key} is not a setting this robot has",
+            detail={"key": key, "class": UNKNOWN},
+        )
 
     def config_rollback(self) -> Outcome:
         """The Axol has no severing class, so no change is ever left open.
@@ -303,6 +308,7 @@ class AxolAdapter:
             return Outcome(
                 ok=False,
                 message=f"{key} shapes motion and an operation is running; stop it first",
+                detail={"key": key, "class": MOTION},
             )
         return None
 
