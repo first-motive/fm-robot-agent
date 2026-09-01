@@ -129,10 +129,16 @@ class AxolAdapter:
         session = operation.get("session") or {}
         running = bool(operation.get("running"))
         return {
-            "mode": self._fleet_mode(session.get("command") or session.get("op")),
+            # `command` holds the operation id — Session.to_dict() in the Axol's
+            # own manager spells it that way, and nothing spells it `op`.
+            #
+            # Only a RUNNING operation is a mode. The Axol keeps the last session
+            # in its status long after it exits, so reading the name alone
+            # reports a robot as teleoperating while its motors sit disconnected.
+            "mode": self._fleet_mode(session.get("command")) if running else None,
             "modes": sorted(MODES),
             "hardware": robot.get("state", "unknown"),
-            "recording": running and session.get("op") == RECORD_OPERATION,
+            "recording": running and session.get("command") == RECORD_OPERATION,
             "services": [{"name": "almond-axol", "state": robot.get("state", "unknown")}],
             "disk": None,
             "motors": robot.get("motors"),

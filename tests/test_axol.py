@@ -27,6 +27,8 @@ class ServerStub:
         self.state = "connected"
         self.refuse: set[str] = set()
 
+    exited_session: dict | None = None
+
     def handle(self, method: str, path: str, payload: dict | None) -> dict:
         self.requests.append((method, path, payload))
         if path in self.refuse:
@@ -34,13 +36,12 @@ class ServerStub:
         if path == "/api/robot/status":
             return {"state": self.state, "motors": {"left:SHOULDER_1": {"reachable": True}}}
         if path == "/api/op/status":
-            return {
-                "running": self.running_op is not None,
-                "session": {"id": "s1", "op": self.running_op} if self.running_op else None,
-            }
+            if self.running_op is not None:
+                return {"running": True, "session": {"id": "s1", "command": self.running_op}}
+            return {"running": False, "session": self.exited_session}
         if path == "/api/op/start":
             self.running_op = payload["op"]
-            return {"id": "s2", "op": self.running_op}
+            return {"id": "s2", "command": self.running_op}
         if path == "/api/op/stop":
             if self.running_op is None:
                 raise urllib.error.HTTPError(path, 404, "no operation running", None, None)
@@ -122,6 +123,14 @@ def test_status_names_the_running_mode_in_fleet_terms(adapter, server):
     adapter.set_mode("policy")
     assert server.running_op == "run-policy"
     assert adapter.status()["mode"] == "policy"
+
+
+def test_a_session_that_exited_is_not_a_mode(adapter, server):
+    """The Axol keeps its last session in status; reading the name alone lies."""
+    server.exited_session = {"id": "s1", "command": "teleop", "status": "exited"}
+    reported = adapter.status()
+    assert reported["mode"] is None
+    assert reported["recording"] is False
 
 
 def test_status_reports_recording_only_for_the_record_operation(adapter, server):
@@ -418,3 +427,16 @@ def test_an_off_host_address_is_not_loopback(host):
     from fm_robot_agent.axol import _loopback
 
     assert _loopback(f"https://{host}:8001") is False
+
+
+def test_recording_is_true_while_the_record_operation_runs(adapter, server):
+    """This read False for every recording until the field name was corrected.
+
+    The asymmetry that hid it: `/api/op/start` takes `op`, and the session it
+    returns spells the same value `command` (Session.to_dict in Almond's
+    manager). Reading `op` off a session compares against a field that is never
+    there, so the answer was always False and never raised.
+    """
+    adapter.record("pick-place", "start")
+    assert server.running_op == RECORD_OPERATION
+    assert adapter.status()["recording"] is True
