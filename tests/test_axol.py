@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import urllib.error
 import urllib.request
+from pathlib import Path
 
 import pytest
 
@@ -15,6 +16,7 @@ from fm_robot_agent.axol import (
     AxolAdapter,
     _frame_to_joint_state,
 )
+from fm_robot_agent.config import MODE, MODE_ALIAS, MOTION, TUNING
 from fm_robot_agent.protocol import AdapterError
 
 
@@ -440,3 +442,135 @@ def test_recording_is_true_while_the_record_operation_runs(adapter, server):
     adapter.record("pick-place", "start")
     assert server.running_op == RECORD_OPERATION
     assert adapter.status()["recording"] is True
+
+
+# --- config ------------------------------------------------------------------
+
+#: Almond's own `GET /api/settings` reply, serialized by its own settings module
+#: rather than written here. A stub shaped like the caller's expectation proves
+#: only that the caller agrees with itself.
+ALMOND_SETTINGS = json.loads(
+    (Path(__file__).parent / "data" / "almond-settings.json").read_text(encoding="utf-8")
+)
+
+
+@pytest.fixture
+def settings_server(server):
+    """The stub, answering the settings surface out of Almond's own snapshot."""
+    stored = {"values": {}, "cameras": None, "advanced": {}}
+    real_handle = server.handle
+
+    def handle(method, path, payload):
+        server.requests.append((method, path, payload))
+        if path == "/api/settings" and method == "GET":
+            return {**ALMOND_SETTINGS, **stored}
+        if path == "/api/settings":
+            for section in ("values", "advanced"):
+                stored[section] = {**stored[section], **(payload.get(section) or {})}
+            return dict(stored)
+        server.requests.pop()
+        return real_handle(method, path, payload)
+
+    server.handle = handle
+    server.stored = stored
+    return server
+
+
+def settings(adapter) -> dict:
+    return {setting.key: setting for setting in adapter.config_read()}
+
+
+def test_config_read_forwards_almonds_own_categories(adapter, settings_server):
+    listed = settings(adapter)
+    assert listed["robot.left_stiffness"].klass == MOTION
+    assert listed["recording.fps"].klass == TUNING
+    assert listed["kinematics.pos_weight"].klass == MOTION
+    assert listed["inference.server_host"].klass == TUNING
+
+
+def test_config_read_carries_the_vendors_defaults_and_help(adapter, settings_server):
+    stiffness = settings(adapter)["robot.left_stiffness"]
+    assert stiffness.value == 0.5
+    assert "stiffness" in stiffness.help
+
+
+def test_config_read_carries_the_stored_value_over_the_default(adapter, settings_server):
+    settings_server.stored["values"]["recording.fps"] = 30
+    assert settings(adapter)["recording.fps"].value == 30
+
+
+def test_the_mode_is_a_config_key_like_any_other(adapter, settings_server):
+    mode = settings(adapter)[MODE_ALIAS]
+    assert mode.klass == MODE
+    assert mode.options == tuple(sorted(MODES))
+
+
+def test_a_tuning_setting_is_written_through(adapter, settings_server):
+    outcome = adapter.config_write("recording.fps", "30")
+    assert outcome.ok is True
+    assert settings_server.stored["values"]["recording.fps"] == 30
+
+
+def test_a_value_lands_in_the_type_the_vendor_declared(adapter, settings_server):
+    adapter.config_write("robot.left_stiffness", "0.8")
+    adapter.config_write("recording.observe_torques", "true")
+    assert settings_server.stored["values"]["robot.left_stiffness"] == 0.8
+    assert settings_server.stored["values"]["recording.observe_torques"] is True
+
+
+def test_a_value_the_key_cannot_hold_is_refused(adapter, settings_server):
+    assert adapter.config_write("recording.fps", "quickly").ok is False
+    assert adapter.config_write("recording.observe_torques", "maybe").ok is False
+    assert settings_server.stored["values"] == {}
+
+
+def test_a_setting_this_robot_does_not_have_is_refused(adapter, settings_server):
+    assert adapter.config_write("robot.third_arm_stiffness", "1").ok is False
+
+
+def test_a_motion_setting_is_refused_while_an_operation_runs(adapter, settings_server):
+    settings_server.running_op = "teleop"
+    assert adapter.config_write("robot.left_stiffness", "0.8").ok is False
+    assert settings_server.stored["values"] == {}
+
+
+def test_a_motion_setting_is_written_once_the_robot_is_idle(adapter, settings_server):
+    assert adapter.config_write("robot.left_stiffness", "0.8").ok is True
+
+
+def test_a_tuning_setting_is_written_while_an_operation_runs(adapter, settings_server):
+    """Idle is a guard on motion, not a mood: an fps change interrupts nothing."""
+    settings_server.running_op = "teleop"
+    assert adapter.config_write("recording.fps", "30").ok is True
+
+
+# --- the advanced tree -------------------------------------------------------
+
+
+def test_an_advanced_key_is_passed_through_by_exact_key(adapter, settings_server):
+    assert adapter.config_write("axol.left.shoulder_1.kp", "45").ok is True
+    assert settings_server.stored["advanced"]["axol.left.shoulder_1.kp"] == 45
+
+
+def test_an_advanced_key_is_refused_while_an_operation_runs(adapter, settings_server):
+    """The whole tree is guarded as motion, because nobody here has read it."""
+    settings_server.running_op = "teleop"
+    assert adapter.config_write("axol.left.shoulder_1.kp", "45").ok is False
+
+
+def test_a_key_in_no_advanced_section_is_refused(adapter, settings_server):
+    assert adapter.config_write("firmware.left.flash", "1").ok is False
+
+
+def test_a_stored_advanced_value_is_listed_as_motion(adapter, settings_server):
+    settings_server.stored["advanced"]["axol.left.shoulder_1.kp"] = 45
+    assert settings(adapter)["axol.left.shoulder_1.kp"].klass == MOTION
+
+
+def test_the_mode_alias_starts_the_operation_it_names(adapter, settings_server):
+    assert adapter.config_write(MODE_ALIAS, "teleop").ok is True
+    assert settings_server.running_op == "teleop"
+
+
+def test_rollback_says_the_axol_journals_nothing(adapter, settings_server):
+    assert adapter.config_rollback().ok is False

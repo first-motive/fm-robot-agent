@@ -11,9 +11,29 @@ laptop and see the surface work before a robot is on the bench.
 
 from __future__ import annotations
 
+from fm_robot_agent.config import (
+    MODE,
+    MODE_ALIAS,
+    MOTION,
+    SEVERING,
+    TUNING,
+    UNKNOWN,
+    Setting,
+)
 from fm_robot_agent.protocol import Outcome
 
 MODES = ("idle", "teleop")
+
+#: One key of every class, because what the suite needs to exercise is the guard
+#: each class carries rather than any robot's real key set. The names are the
+#: Anvil's, so a fixture reads like the robot a reader has in mind.
+FAKE_KEYS = {
+    "ARMS_CONTROL_CONFIG_FILE": MODE,
+    "CYCLONEDDS_IFACE": SEVERING,
+    "TELEOP_POSITION_SCALE": MOTION,
+    "CYCLONEDDS_VERBOSITY": TUNING,
+    "ANVIL_SOMETHING_NEW": UNKNOWN,
+}
 
 
 class FakeAdapter:
@@ -26,6 +46,16 @@ class FakeAdapter:
         self.running = False
         self.recording: str | None = None
         self._episodes: dict[str, list[dict]] = {}
+        self.config = {
+            "ARMS_CONTROL_CONFIG_FILE": MODES[0],
+            "CYCLONEDDS_IFACE": "eth0",
+            "TELEOP_POSITION_SCALE": "1.0",
+            "CYCLONEDDS_VERBOSITY": "warning",
+            "ANVIL_SOMETHING_NEW": "whatever the vendor added",
+        }
+        #: What a severing write would restore. The fake never severs anything,
+        #: so it only has to remember that a window is open.
+        self.pending: tuple[str, str] | None = None
 
     def status(self) -> dict:
         return {
@@ -45,10 +75,39 @@ class FakeAdapter:
         return Outcome(ok=True, message="fake robot down")
 
     def set_mode(self, config: str) -> Outcome:
-        if config not in MODES:
-            return Outcome(ok=False, message=f"unknown mode {config!r}")
-        self.mode = config
-        return Outcome(ok=True, message=f"mode {config}")
+        return self.config_write(MODE_ALIAS, config)
+
+    def config_read(self) -> list[Setting]:
+        return [
+            Setting(key=key, value=self.config[key], klass=klass)
+            for key, klass in sorted(FAKE_KEYS.items())
+        ]
+
+    def config_write(self, key: str, value: str) -> Outcome:
+        if key == MODE_ALIAS:
+            key = "ARMS_CONTROL_CONFIG_FILE"
+        klass = FAKE_KEYS.get(key, UNKNOWN)
+        if klass == UNKNOWN or key not in self.config:
+            return Outcome(ok=False, message=f"{key} is unclassified and cannot be written")
+        if klass == MOTION and self.running:
+            return Outcome(ok=False, message=f"{key} is a motion key and this robot is busy")
+        if klass == MODE and value not in MODES:
+            return Outcome(ok=False, message=f"unknown mode {value!r}")
+        previous = self.config[key]
+        self.config[key] = value
+        if klass == MODE:
+            self.mode = value
+        if klass == SEVERING:
+            self.pending = (key, previous)
+        return Outcome(ok=True, message=f"{key}={value}", detail={"class": klass})
+
+    def config_rollback(self) -> Outcome:
+        if self.pending is None:
+            return Outcome(ok=False, message="no change is open")
+        key, previous = self.pending
+        self.config[key] = previous
+        self.pending = None
+        return Outcome(ok=True, message=f"{key} restored", detail={"key": key})
 
     def record(self, dataset: str, action: str) -> Outcome:
         if action == "start":

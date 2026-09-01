@@ -9,7 +9,7 @@ episode queryable uses, for the same reason: the suite runs with no router.
     fm/robot/<ns>/status      read    robot state, one round trip
     fm/robot/<ns>/up          write   bring the stack up
     fm/robot/<ns>/down        write   take the stack down
-    fm/robot/<ns>/mode        write   {"config": "..."}
+    fm/robot/<ns>/config      write   {"action": "get"|"set"|"rollback", ...}
     fm/robot/<ns>/record      write   {"dataset": "...", "action": "start"|"stop"}
     fm/robot/<ns>/stop        write   halt motion, vendor mechanism
     fm/robot/<ns>/episodes    read    ?dataset=<slug>
@@ -35,10 +35,19 @@ from fm_robot_agent.protocol import SCHEMA_VERSION, AdapterError, Outcome, Robot
 KEY_PREFIX = "fm/robot"
 
 READ_VERBS = ("status", "episodes")
-WRITE_VERBS = ("up", "down", "mode", "record", "stop")
+WRITE_VERBS = ("up", "down", "config", "record", "stop")
 VERBS = READ_VERBS + WRITE_VERBS
 
 RECORD_ACTIONS = ("start", "stop")
+
+#: What `config` can be asked to do. `get` reads, and is still a write verb's
+#: neighbour rather than a read one: a wildcard discovery query has no business
+#: enumerating every robot's transport configuration.
+CONFIG_ACTIONS = ("get", "set", "rollback")
+
+#: Ceiling on one configuration value. Every value either robot holds is a
+#: number, a boolean, an interface name, or a filename.
+MAX_VALUE_LEN = 256
 
 #: Ceiling on a write verb's body. Every body the contract defines is a handful
 #: of bytes, so anything past this is a caller on the fabric spending the agent's
@@ -98,6 +107,40 @@ def _body(payload: bytes | None) -> dict:
 #: this is how `fm robot list` and the desktop find robots with no hostname and
 #: no registry. Every other segment must match this agent's own namespace.
 DISCOVERY_SEGMENT = "*"
+
+
+def _config(key: str, adapter: RobotAdapter, body: dict) -> Reply:
+    """Route one of the three config actions.
+
+    Everything the guards decide happens in the adapter, which is the only place
+    that knows whether this robot is idle and what its keys mean. What is checked
+    here is the shape of the request, so an adapter never sees a value that is not
+    a short string.
+    """
+    action = body.get("action") or ""
+    if action not in CONFIG_ACTIONS:
+        return _refuse(key, f"action must be one of {CONFIG_ACTIONS}")
+
+    if action == "get":
+        return _envelope(key, {"ok": True, "config": [s.as_dict() for s in adapter.config_read()]})
+
+    if action == "rollback":
+        return _outcome(key, adapter.config_rollback())
+
+    # set
+    config_key = body.get("key") or ""
+    value = body.get("value")
+    if not isinstance(config_key, str) or not config_key:
+        return _refuse(key, "set needs a key")
+    if isinstance(value, (bool, int, float)):
+        # A number typed as JSON is the same value the file holds as text, and
+        # refusing it would make the wire harder to speak than it has to be.
+        value = str(value).lower() if isinstance(value, bool) else str(value)
+    if not isinstance(value, str) or not value:
+        return _refuse(key, "set needs a value")
+    if len(value) > MAX_VALUE_LEN:
+        return _refuse(key, f"value is longer than {MAX_VALUE_LEN} characters")
+    return _outcome(key, adapter.config_write(config_key, value))
 
 
 def verb_of(key: str, namespace: str) -> str | None:
@@ -162,11 +205,8 @@ def answer(
         if verb == "stop":
             return _outcome(key, adapter.stop())
 
-        if verb == "mode":
-            config = body.get("config") or ""
-            if not isinstance(config, str) or not config:
-                return _refuse(key, "mode needs a config")
-            return _outcome(key, adapter.set_mode(config))
+        if verb == "config":
+            return _config(key, adapter, body)
 
         # record
         dataset = body.get("dataset") or ""

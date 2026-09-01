@@ -18,6 +18,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Protocol, runtime_checkable
 
+from fm_robot_agent.config import Setting
+
 #: Bumped when a payload shape changes meaning. Every reply carries it so a
 #: desktop built against an older agent refuses the reply rather than decoding
 #: a field that has moved underneath it.
@@ -66,7 +68,35 @@ class RobotAdapter(Protocol):
         """Take the robot's stack down."""
 
     def set_mode(self, config: str) -> Outcome:
-        """Switch control mode. ``config`` is one of the values ``status`` reports."""
+        """Switch control mode. ``config`` is one of the values ``status`` reports.
+
+        Sugar over ``config_write(MODE_ALIAS, config)``, kept because `fm robot
+        <name> mode <value>` predates the config verb and still reads better than
+        naming the key each robot happens to spell it with.
+        """
+
+    def config_read(self) -> list[Setting]:
+        """Every key of this robot's own configuration, with its value and class.
+
+        Read from the robot rather than from a table here: both vendors edit
+        their configuration files on their own release schedule, and a hardcoded
+        key list goes stale silently. What this repo owns is the classification,
+        not the enumeration.
+        """
+
+    def config_write(self, key: str, value: str) -> Outcome:
+        """Write one key, subject to the guard its class carries.
+
+        ``ok`` false is a refusal the caller must see: an unknown key, a motion
+        key while the robot is busy, a value the validator rejects.
+        """
+
+    def config_rollback(self) -> Outcome:
+        """Undo the open severing change, if one is open.
+
+        Called both by the verb and by the agent on startup, so a change whose
+        verification the agent did not survive is still undone.
+        """
 
     def record(self, dataset: str, action: str) -> Outcome:
         """Start or stop recording an episode into ``dataset``.

@@ -4,7 +4,7 @@ The agent process: one Zenoh queryable, one adapter, one robot.
 
 ## Why
 
-A robot's own stack cannot answer for itself. The mode config it reads is
+A robot's own stack cannot answer for itself. The configuration it reads is
 rewritten from outside, the containers it runs in are restarted from outside, and
 the episode files it writes are counted from outside. This agent is that outside,
 running on the robot's host under systemd, reachable only through the fleet
@@ -25,6 +25,28 @@ flowchart LR
     E[env.py] -.->|router endpoint| S
 ```
 
+## Config And Its Guards
+
+```
+config get   ──▶ every key the robot holds, each with its class
+config set   ──▶ severing  write · restart stack + bridge · watch telemetry · revert if dead
+                 motion    refused unless the robot reports itself idle
+                 tuning    written through
+                 mode      validated against what the robot offers
+                 unknown   refused; an unclassified key is never written
+config rollback ─▶ undo the open severing change
+```
+
+A severing change is journalled to disk before anything is written and the
+journal is closed only once telemetry has been seen. An agent that starts and
+finds one open is an agent whose predecessor died inside the verification window,
+so `service.py` finishes the rollback it inherited before answering anything.
+
+On the Anvil the domain and the interface live in two files — the loader's
+`.env.config` and `/etc/fm-comms.env` — and a write lands in both or in neither.
+Writing one and not the other is exactly the silent defect the 2026-09-01
+hardware run found twice.
+
 Only `service.py` imports Zenoh. Everything the suite exercises — the router, the
 adapters, the card and env readers — runs with no session, no router, and no
 robot.
@@ -34,6 +56,7 @@ robot.
 | Module | Holds |
 | --- | --- |
 | `protocol.py` | `RobotAdapter`, `Outcome`, the schema version every reply carries |
+| `config.py` | what a configuration key is: its class, its journal, env-file reads and writes |
 | `verbs.py` | key → adapter call → reply, as one pure function |
 | `card.py` | this host's identity card: name, namespace, robot kind |
 | `env.py` | the router endpoint, from the environment or `/etc/fm-comms.env` |

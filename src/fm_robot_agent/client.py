@@ -6,6 +6,9 @@ and the reply into either a line a person reads or the JSON a script does.
 
     fm robot fm-rob-01 status
     fm robot fm-rob-01 mode openarm_v2_quest_teleop.yaml
+    fm robot fm-rob-01 config get
+    fm robot fm-rob-01 config set CYCLONEDDS_VERBOSITY=fine
+    fm robot fm-rob-01 config rollback
     fm robot fm-rob-01 record start --dataset grocery-sort-v1
     fm robot list
 
@@ -24,12 +27,24 @@ import json
 import re
 import sys
 
+from fm_robot_agent.config import MODE_ALIAS
 from fm_robot_agent.env import EndpointError, router_endpoint
-from fm_robot_agent.verbs import KEY_PREFIX, READ_VERBS, VERBS
+from fm_robot_agent.verbs import CONFIG_ACTIONS, KEY_PREFIX, READ_VERBS, VERBS
 
 #: A query waits this long for a robot to answer. Compose operations detach and
 #: report through `status`, so no verb should ever need longer.
 QUERY_TIMEOUT_S = 15.0
+
+#: A severing config write is answered only once the agent has watched its own
+#: telemetry come back, which takes the stack's recreate plus the bridge's
+#: discovery. The one verb whose answer is worth waiting minutes for.
+CONFIG_TIMEOUT_S = 150.0
+
+#: `mode` is not a verb on the wire any more — it is a config write of the one
+#: key each robot spells its own way, kept here because it reads better than
+#: naming that key and predates the config verb.
+MODE_SUGAR = "mode"
+TYPED_VERBS = (*VERBS, MODE_SUGAR)
 
 EX_USAGE = 2
 EX_PRECONDITION = 3
@@ -57,19 +72,43 @@ def safe(text: object) -> str:
 
 def build_payload(verb: str, args: argparse.Namespace) -> dict | None:
     """The body a write verb carries, or ``None`` for one that carries none."""
-    if verb == "mode":
-        return {"config": args.value}
+    if verb == MODE_SUGAR:
+        return {"action": "set", "key": MODE_ALIAS, "value": args.value}
+    if verb == "config":
+        action = args.value or "get"
+        if action != "set":
+            return {"action": action}
+        key, _, value = (args.assignment or "").partition("=")
+        return {"action": "set", "key": key, "value": value}
     if verb == "record":
         return {"dataset": args.dataset, "action": args.value or "start"}
     return None
 
 
-def query(session, key: str, payload: dict | None = None, parameters: str = "") -> list[dict]:
+def wire_verb(verb: str) -> str:
+    """The key a typed verb lands on. `mode` is sugar over `config`."""
+    return "config" if verb == MODE_SUGAR else verb
+
+
+def render_config(reply: dict) -> None:
+    """One line per key: what it is, what it holds, and which guard it carries."""
+    for setting in reply["config"]:
+        writable = "" if setting["writable"] else "  read-only"
+        print(f"{safe(setting['key'])}={safe(setting['value'])}  [{safe(setting['class'])}]{writable}")
+
+
+def query(
+    session,
+    key: str,
+    payload: dict | None = None,
+    parameters: str = "",
+    timeout_s: float = QUERY_TIMEOUT_S,
+) -> list[dict]:
     """Send one query and collect every reply, decoded."""
     import zenoh
 
     selector = f"{key}?{parameters}" if parameters else key
-    kwargs = {"timeout": QUERY_TIMEOUT_S}
+    kwargs = {"timeout": timeout_s}
     if payload is not None:
         kwargs["payload"] = json.dumps(payload).encode()
     replies = []
@@ -103,7 +142,14 @@ def render(replies: list[dict], as_json: bool) -> None:
         return
     for reply in replies:
         if reply.get("ok") is False:
-            print(f"refused: {safe(reply.get('error') or reply.get('message') or 'no reason given')}")
+            # The class is what says which guard refused, and it is the first
+            # thing an operator needs: a motion refusal is undone by taking the
+            # stack down, an unknown one is not undone at all.
+            guard = f" ({safe(reply['class'])})" if reply.get("class") else ""
+            print(f"refused{guard}: {safe(reply.get('error') or reply.get('message') or 'no reason given')}")
+            continue
+        if "config" in reply:
+            render_config(reply)
             continue
         shown = {k: v for k, v in reply.items() if k != "schema_version"}
         print(safe(json.dumps(shown, sort_keys=True)))
@@ -115,8 +161,15 @@ def main(argv: list[str] | None = None) -> int:
         description="Drive a First Motive robot over the fleet fabric.",
     )
     parser.add_argument("device", help="the robot's device name, or `list` to discover them")
-    parser.add_argument("verb", nargs="?", choices=VERBS, help=f"one of: {', '.join(VERBS)}")
-    parser.add_argument("value", nargs="?", help="mode: the config; record: start | stop")
+    parser.add_argument(
+        "verb", nargs="?", choices=TYPED_VERBS, help=f"one of: {', '.join(TYPED_VERBS)}"
+    )
+    parser.add_argument(
+        "value",
+        nargs="?",
+        help=f"mode: the config; record: start | stop; config: {' | '.join(CONFIG_ACTIONS)}",
+    )
+    parser.add_argument("assignment", nargs="?", help="config set: KEY=VALUE")
     parser.add_argument("--dataset", default="", help="the dataset a record or episodes verb acts on")
     parser.add_argument("--json", action="store_true", dest="as_json", help="print the raw reply")
     args = parser.parse_args(argv)
@@ -126,8 +179,14 @@ def main(argv: list[str] | None = None) -> int:
         parser.error(f"{args.device!r} is not a device name (fm-rob-01), and only `list` queries many")
     if not listing and args.verb is None:
         parser.error("a verb is required")
-    if not listing and args.verb == "mode" and not args.value:
+    if not listing and args.verb == MODE_SUGAR and not args.value:
         parser.error("mode needs a config")
+    if not listing and args.verb == "config":
+        action = args.value or "get"
+        if action not in CONFIG_ACTIONS:
+            parser.error(f"config takes one of: {', '.join(CONFIG_ACTIONS)}")
+        if action == "set" and "=" not in (args.assignment or ""):
+            parser.error("config set takes KEY=VALUE")
     if not listing and args.verb in ("record", "episodes") and not args.dataset:
         parser.error(f"{args.verb} needs --dataset")
 
@@ -143,9 +202,16 @@ def main(argv: list[str] | None = None) -> int:
             render(replies, args.as_json)
             return 0
 
-        key = f"{KEY_PREFIX}/{namespace_of(args.device)}/{args.verb}"
-        parameters = f"dataset={args.dataset}" if args.verb in READ_VERBS and args.dataset else ""
-        replies = query(session, key, build_payload(args.verb, args), parameters)
+        verb = wire_verb(args.verb)
+        key = f"{KEY_PREFIX}/{namespace_of(args.device)}/{verb}"
+        parameters = f"dataset={args.dataset}" if verb in READ_VERBS and args.dataset else ""
+        replies = query(
+            session,
+            key,
+            build_payload(args.verb, args),
+            parameters,
+            timeout_s=CONFIG_TIMEOUT_S if verb == "config" else QUERY_TIMEOUT_S,
+        )
 
     if not replies:
         print(f"fm robot: {args.device} did not answer", file=sys.stderr)
