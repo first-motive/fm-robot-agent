@@ -27,6 +27,7 @@ import re
 import shlex
 import shutil
 import subprocess
+import time
 from pathlib import Path
 
 from fm_robot_agent.config import (
@@ -37,9 +38,11 @@ from fm_robot_agent.config import (
     TUNING,
     UNKNOWN,
     ConfigError,
+    Journal,
     Setting,
     env_replaced,
     env_values,
+    restore,
 )
 from fm_robot_agent.protocol import AdapterError, Outcome
 from fm_robot_agent.trpc import TrpcClient
@@ -97,6 +100,32 @@ IFACE_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,15}$")
 #: The highest DDS domain the RTPS port mapping leaves room for.
 MAX_DOMAIN_ID = 232
 
+#: Where the open severing change is journalled. Not in the loader directory:
+#: that directory is Anvil's, and a file of ours in it is one more thing their
+#: next release has to survive.
+STATE_DIR = Path(
+    os.environ.get("FM_ROBOT_AGENT_STATE_DIR", str(Path.home() / ".local" / "state" / "fm-robot-agent"))
+)
+
+#: The unit that carries this robot's telemetry onto the fabric. Restarted after
+#: a severing write because it reads the same two values from the fleet file.
+BRIDGE_UNIT = os.environ.get("FM_BRIDGE_UNIT", "fm-zenoh-bridge")
+
+#: The topic whose arrival means the data plane came back. It is the one every
+#: rig publishes and the desktop subscribes to, so if this moves nothing else the
+#: fleet watches is moving either.
+TELEMETRY_TOPIC = "/joint_states"
+
+#: How long a severing change is given to prove itself, and how often it is
+#: asked. Ninety seconds is the stack's own recreate time plus the bridge's
+#: discovery, measured on the workcell rather than guessed.
+VERIFY_WINDOW_S = 90.0
+VERIFY_INTERVAL_S = 5.0
+
+#: How long one probe waits for a message. Shorter than the interval so a probe
+#: that finds nothing still leaves time for the next one.
+PROBE_TIMEOUT_S = 4
+
 COMPOSE_ACTIONS = {
     "up": ["up", "-d"],
     "down": ["down"],
@@ -142,6 +171,7 @@ class AnvilAdapter:
         loader_dir: Path | None = None,
         webapp_url: str | None = None,
         comms_env: Path | None = None,
+        journal: Journal | None = None,
     ) -> None:
         self.loader_dir = loader_dir or Path(
             os.environ.get("FM_ANVIL_LOADER_DIR", str(Path.home() / "anvil-loader"))
@@ -150,6 +180,7 @@ class AnvilAdapter:
         self.env_config = self.loader_dir / ".env.config"
         self.recordings_dir = self.loader_dir / "data" / "recordings"
         self.comms_env = comms_env or FM_COMMS_ENV
+        self.journal = journal or Journal(STATE_DIR / "config-journal.json")
         # The webapp is on this host. Recording is a localhost call, never a
         # fleet one: the fabric reaches the agent, and the agent reaches the
         # webapp, which is what keeps port 3000 off the tailnet.
@@ -285,6 +316,8 @@ class AnvilAdapter:
                 ok=False,
                 message=f"{key} shapes motion and the stack is up; take it down first",
             )
+        if klass == SEVERING:
+            return self._write_severing(key, value)
         self._write_paired(key, value)
         applied = self._apply(klass)
         return Outcome(
@@ -293,9 +326,130 @@ class AnvilAdapter:
             detail={"key": key, "value": value, "class": klass},
         )
 
+    def _write_severing(self, key: str, value: str) -> Outcome:
+        """Write a transport key, then prove the robot still reaches the fleet.
+
+        The control plane this reply travels on is zenoh over TCP to the router
+        and no transport key touches it, so the agent stays reachable however
+        wrong the value was. What a wrong value takes away is the telemetry — and
+        it takes it away silently, which is why this waits for the data plane
+        rather than for an error nobody will get.
+        """
+        if self.journal.read() is not None:
+            return Outcome(
+                ok=False,
+                message="a severing change is already open; roll it back first",
+            )
+        previous = self._paired_previous(key, value)
+        self.journal.open(key, value, previous)
+        try:
+            self._write_paired(key, value)
+        except AdapterError:
+            # Nothing was left changed, so nothing is left to undo — and a
+            # journal left open would refuse every severing write after it.
+            self.journal.close()
+            raise
+        self._restart_data_plane()
+        if self._data_plane_returns():
+            self.journal.close()
+            return Outcome(
+                ok=True,
+                message=f"{key}={value}; telemetry returned",
+                detail={"key": key, "value": value, "class": SEVERING, "verified": True},
+            )
+        reverted = self._revert(previous)
+        return Outcome(
+            ok=False,
+            message=f"{key}={value} killed telemetry; reverted {', '.join(reverted)}",
+            detail={"key": key, "value": value, "class": SEVERING, "verified": False},
+        )
+
+    def finish_open_change(self) -> Outcome | None:
+        """Undo a severing change this agent did not live to verify.
+
+        The journal is closed only once telemetry has been seen, so an agent that
+        starts and finds one open is an agent whose predecessor died inside the
+        window. Whether it died because of the change or beside it, the honest
+        move is the same: put back what was there and say so.
+        """
+        entry = self.journal.read()
+        if entry is None:
+            return None
+        return self.config_rollback()
+
     def config_rollback(self) -> Outcome:
-        """Nothing to undo until step 3 journals a severing change."""
-        return Outcome(ok=False, message="no change is open")
+        """Restore the files the open severing change replaced, and restart."""
+        entry = self.journal.read()
+        if entry is None:
+            return Outcome(ok=False, message="no change is open")
+        restored = restore(entry["files"])
+        self._restart_data_plane()
+        self.journal.close()
+        return Outcome(
+            ok=True,
+            message=f"{entry.get('key', 'the open change')} rolled back; restored {', '.join(restored)}",
+            detail={"key": entry.get("key", ""), "restored": restored},
+        )
+
+    def _paired_previous(self, key: str, value: str) -> dict:
+        """What every file this write touches holds right now."""
+        return {path: self._read(path) for path in self._paired_edits(key, value)}
+
+    def _revert(self, previous: dict) -> list[str]:
+        restored = restore({str(path): text for path, text in previous.items()})
+        self._restart_data_plane()
+        self.journal.close()
+        return restored
+
+    def _restart_data_plane(self) -> None:
+        """Recreate the stack and restart the bridge, so both read the new values.
+
+        Both, because the pair is the point: the containers take the domain and
+        the interface from `.env.config`, and the bridge takes the same two from
+        the fleet file. Restarting one of them is how they were last found
+        disagreeing.
+        """
+        self._compose_detached("recreate")
+        try:
+            subprocess.run(
+                ["systemctl", "restart", BRIDGE_UNIT],
+                capture_output=True,
+                text=True,
+                timeout=COMPOSE_TIMEOUT_S,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            # A host without the bridge unit is a bench host, and a bench host
+            # has no fabric to lose. The verification below decides either way.
+            pass
+
+    def _data_plane_returns(self) -> bool:
+        """Wait for telemetry, up to the window a recreate and discovery need."""
+        deadline = time.monotonic() + VERIFY_WINDOW_S
+        while time.monotonic() < deadline:
+            if self._telemetry_arrives():
+                return True
+            time.sleep(VERIFY_INTERVAL_S)
+        return self._telemetry_arrives()
+
+    def _telemetry_arrives(self) -> bool:
+        """Whether one message lands on the topic the fleet watches.
+
+        Probed inside the ros2 container rather than from the fabric: the agent
+        holds a zenoh session for the verb set, and every adapter here imports no
+        zenoh precisely so the suite runs without a router. So this proves the
+        graph the bridge subscribes to is alive, not the hop past it — the bridge
+        is restarted alongside and its own unit failing is the other half.
+        """
+        try:
+            self._ros_command(
+                f"ros2 topic echo --once --timeout {PROBE_TIMEOUT_S} {TELEMETRY_TOPIC}",
+                TELEMETRY_TOPIC,
+                timeout_s=PROBE_TIMEOUT_S * 2,
+            )
+        except AdapterError:
+            return False
+        return True
 
     def _validated(self, key: str, value: str) -> str:
         """The value as the file should hold it, or raise the reason it may not.
@@ -494,23 +648,22 @@ class AnvilAdapter:
 
     # --- ros2 services -------------------------------------------------------
 
-    def _service_call(self, service: str, service_type: str, request: str) -> str:
-        """Call a ROS service from inside the ros2 container, and return its output.
+    def _ros_command(self, command: str, what: str, timeout_s: float = SERVICE_TIMEOUT_S) -> str:
+        """Run one `ros2` command inside the ros2 container, and return its output.
 
-        ``anvil_msgs`` exists only in that container, so the call cannot be made
-        from the host. Argument list, never a shell — the arguments are fixed
-        here and no caller-supplied value reaches them.
+        ``anvil_msgs`` exists only in that container, so a service call cannot be
+        made from the host; the telemetry probe runs there for the same reason.
+        Argument list, never a shell — every value in ``command`` is built from
+        constants in this module, and no caller-supplied string reaches it.
         """
-        # One `bash -c` because the sourcing and the call have to share a shell.
-        # Every value in it is a constant from this module — no caller-supplied
-        # string reaches the command line.
-        # The two env-supplied values are quoted like the arguments are. They come
-        # from this host's own config rather than the fabric, but a path and an
-        # RMW name are still values someone typed, and quoting costs nothing.
+        # One `bash -c` because the sourcing and the command have to share a
+        # shell. The two env-supplied values are quoted like the arguments are.
+        # They come from this host's own config rather than the fabric, but a
+        # path and an RMW name are still values someone typed, and quoting costs
+        # nothing.
         inner = (
             f"source {ROS_SETUP} && source {shlex.quote(WORKSPACE_SETUP)} && "
-            f"RMW_IMPLEMENTATION={shlex.quote(RMW)} "
-            f"ros2 service call {shlex.quote(service)} {shlex.quote(service_type)} {shlex.quote(request)}"
+            f"RMW_IMPLEMENTATION={shlex.quote(RMW)} {command}"
         )
         try:
             result = subprocess.run(
@@ -518,14 +671,21 @@ class AnvilAdapter:
                 cwd=self.loader_dir,
                 capture_output=True,
                 text=True,
-                timeout=SERVICE_TIMEOUT_S,
+                timeout=timeout_s,
                 check=False,
             )
         except (OSError, subprocess.TimeoutExpired) as exc:
-            raise AdapterError(f"{service} did not answer: {exc}") from exc
+            raise AdapterError(f"{what} did not answer: {exc}") from exc
         if result.returncode != 0:
-            raise AdapterError(f"{service} failed: {result.stderr.strip() or 'no output'}")
+            raise AdapterError(f"{what} failed: {result.stderr.strip() or 'no output'}")
         return result.stdout
+
+    def _service_call(self, service: str, service_type: str, request: str) -> str:
+        """Call a ROS service from inside the ros2 container, and return its output."""
+        return self._ros_command(
+            f"ros2 service call {shlex.quote(service)} {shlex.quote(service_type)} {shlex.quote(request)}",
+            service,
+        )
 
     def _is_recording(self) -> bool | None:
         """Whether the workcell is recording, or ``None`` when the stack is down."""

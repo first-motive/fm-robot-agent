@@ -141,6 +141,17 @@ def main(argv: list[str] | None = None) -> int:
         print(f"fm-robot-agent: {exc}", file=sys.stderr)
         return 1
 
+    # A severing config change is journalled before it is written and cleared
+    # only once telemetry has been seen. Finding one open here means the agent
+    # that opened it did not live to verify it, so it is undone before this one
+    # starts answering — an unverified transport change is exactly the silent
+    # failure the journal exists to end.
+    finish = getattr(adapter, "finish_open_change", None)
+    if finish is not None:
+        inherited = finish()
+        if inherited is not None:
+            print(f"fm-robot-agent: {inherited.message}", flush=True)
+
     # A namespace is a ROS name: hyphens cannot appear in one, so an override
     # typed either way lands on the same key the card would have derived.
     namespace = (args.namespace or card.namespace).replace("-", "_")

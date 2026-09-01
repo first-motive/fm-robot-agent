@@ -14,8 +14,9 @@ import subprocess
 
 import pytest
 
+from fm_robot_agent import anvil
 from fm_robot_agent.anvil import KIND, MODE_KEY, AnvilAdapter
-from fm_robot_agent.config import MODE, MOTION, SEVERING, TUNING
+from fm_robot_agent.config import MODE, MOTION, SEVERING, TUNING, Journal
 from fm_robot_agent.protocol import AdapterError
 
 RECORDING_RESPONSE = (
@@ -77,7 +78,11 @@ def loader(tmp_path):
 
 @pytest.fixture
 def adapter(loader, monkeypatch):
-    robot = AnvilAdapter(loader_dir=loader, comms_env=loader / "fm-comms.env")
+    robot = AnvilAdapter(
+        loader_dir=loader,
+        comms_env=loader / "fm-comms.env",
+        journal=Journal(loader / "config-journal.json"),
+    )
     robot.webapp = WebappStub()
 
     def fake_run(argv, **kwargs):
@@ -448,3 +453,70 @@ def test_a_host_with_no_fleet_file_still_writes_its_own(adapter, loader):
     (loader / "fm-comms.env").unlink()
     assert adapter.config_write("ROS_DOMAIN_ID", "7").ok is True
     assert not (loader / "fm-comms.env").exists()
+
+
+# --- the severing guard ------------------------------------------------------
+
+
+@pytest.fixture
+def dead_telemetry(adapter, monkeypatch):
+    """A robot whose data plane never comes back, verified instantly."""
+    monkeypatch.setattr(adapter, "_telemetry_arrives", lambda: False)
+    monkeypatch.setattr(anvil, "VERIFY_WINDOW_S", 0.0)
+    monkeypatch.setattr(anvil, "VERIFY_INTERVAL_S", 0.0)
+    return adapter
+
+
+def test_a_severing_write_that_keeps_telemetry_is_kept(adapter, loader):
+    outcome = adapter.config_write("CYCLONEDDS_IFACE", "eth0")
+    assert outcome.ok is True
+    assert outcome.detail["verified"] is True
+    assert "CYCLONEDDS_IFACE=eth0" in (loader / ".env.config").read_text()
+    assert adapter.journal.read() is None
+
+
+def test_a_severing_write_that_kills_telemetry_reverts_both_files(dead_telemetry, loader):
+    """The three silent defects of 2026-09-01, made undoable on demand."""
+    before_config = (loader / ".env.config").read_text()
+    before_comms = (loader / "fm-comms.env").read_text()
+    outcome = dead_telemetry.config_write("ROS_DOMAIN_ID", "7")
+    assert outcome.ok is False
+    assert outcome.detail["verified"] is False
+    assert (loader / ".env.config").read_text() == before_config
+    assert (loader / "fm-comms.env").read_text() == before_comms
+    assert dead_telemetry.journal.read() is None
+
+
+def test_a_revert_restarts_the_stack_and_the_bridge(dead_telemetry):
+    dead_telemetry.config_write("ROS_DOMAIN_ID", "7")
+    # Once to apply the change, once to put the old one back.
+    assert len(dead_telemetry.launched) == 2
+
+
+def test_a_second_severing_write_while_one_is_open_is_refused(adapter, monkeypatch):
+    """Two overlapping reverts would restore each other's intermediate state."""
+    monkeypatch.setattr(adapter, "_data_plane_returns", lambda: False)
+    monkeypatch.setattr(adapter, "_revert", lambda previous: [])
+    adapter.config_write("ROS_DOMAIN_ID", "7")
+    assert adapter.config_write("CYCLONEDDS_IFACE", "eth0").ok is False
+
+
+def test_an_agent_that_starts_with_an_open_window_finishes_it(adapter, loader):
+    """The journal closes only after telemetry is seen; an open one outlived its agent."""
+    before = (loader / ".env.config").read_text()
+    adapter.journal.open("ROS_DOMAIN_ID", "7", {loader / ".env.config": before})
+    (loader / ".env.config").write_text("ROS_DOMAIN_ID=7\n", encoding="utf-8")
+
+    outcome = adapter.finish_open_change()
+
+    assert outcome.ok is True
+    assert (loader / ".env.config").read_text() == before
+    assert adapter.journal.read() is None
+
+
+def test_an_agent_that_starts_with_no_open_window_does_nothing(adapter):
+    assert adapter.finish_open_change() is None
+
+
+def test_rollback_with_nothing_open_says_so(adapter):
+    assert adapter.config_rollback().ok is False
