@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import os
 import re
+import shlex
 import shutil
 import subprocess
 from pathlib import Path
@@ -53,6 +54,18 @@ METADATA_MAX_BYTES = 1 << 20
 #: tradeoff: brittle if anvil_msgs renames the field, and the alternative is a
 #: rclpy client inside a container the agent deliberately runs outside of.
 IS_RECORDING_PATTERN = re.compile(r"is_recording=(True|False)")
+
+#: What a service call has to set up before `ros2` will answer, and why each is
+#: needed. `docker compose exec` starts a process WITHOUT the image entrypoint,
+#: which is the thing that normally sources ROS — so a bare `ros2` is not even on
+#: PATH. The workcell's own messages are built into a workspace overlay rather
+#: than the base install, so `anvil_msgs` is unknown without the second source.
+#: And the image ships CycloneDDS while the default resolution picks Fast DDS,
+#: which reaches the service and then fails decoding its reply ("payload size 24
+#: is larger than the history payload size of 11").
+ROS_SETUP = "/opt/ros/$ROS_DISTRO/setup.bash"
+WORKSPACE_SETUP = os.environ.get("FM_ANVIL_ROS_OVERLAY", "/workspace/install/setup.bash")
+RMW = os.environ.get("FM_ANVIL_RMW", "rmw_cyclonedds_cpp")
 
 SERVICE_TIMEOUT_S = 15
 COMPOSE_TIMEOUT_S = 30
@@ -274,12 +287,20 @@ class AnvilAdapter:
         from the host. Argument list, never a shell — the arguments are fixed
         here and no caller-supplied value reaches them.
         """
+        # One `bash -c` because the sourcing and the call have to share a shell.
+        # Every value in it is a constant from this module — no caller-supplied
+        # string reaches the command line.
+        # The two env-supplied values are quoted like the arguments are. They come
+        # from this host's own config rather than the fabric, but a path and an
+        # RMW name are still values someone typed, and quoting costs nothing.
+        inner = (
+            f"source {ROS_SETUP} && source {shlex.quote(WORKSPACE_SETUP)} && "
+            f"RMW_IMPLEMENTATION={shlex.quote(RMW)} "
+            f"ros2 service call {shlex.quote(service)} {shlex.quote(service_type)} {shlex.quote(request)}"
+        )
         try:
             result = subprocess.run(
-                [
-                    "docker", "compose", "exec", "-T", "ros2",
-                    "ros2", "service", "call", service, service_type, request,
-                ],
+                ["docker", "compose", "exec", "-T", "ros2", "bash", "-c", inner],
                 cwd=self.loader_dir,
                 capture_output=True,
                 text=True,

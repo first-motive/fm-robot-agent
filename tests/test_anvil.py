@@ -8,6 +8,7 @@ about how it is wired together.
 from __future__ import annotations
 
 import json
+import shlex
 import subprocess
 
 import pytest
@@ -175,11 +176,10 @@ def test_stop_pauses_the_hardware_state_controller(adapter, monkeypatch):
     )
     outcome = adapter.stop()
     assert outcome.detail["state"] == "pause"
-    assert seen[0][-3:] == [
-        "/hardware_state_controller/set_state",
-        "anvil_msgs/srv/SetHardwareState",
-        "{state: pause}",
-    ]
+    called = seen[0][-1]
+    assert "ros2 service call /hardware_state_controller/set_state" in called
+    assert "anvil_msgs/srv/SetHardwareState" in called
+    assert "{state: pause}" in called
 
 
 def test_stop_never_asks_for_estop(adapter, monkeypatch):
@@ -252,3 +252,60 @@ def test_an_oversized_metadata_file_is_truncated(adapter, loader):
     path = loader / "data" / "recordings" / "grocery-sort-v1" / "0000" / "metadata.yaml"
     path.write_text("x" * (METADATA_MAX_BYTES + 4096), encoding="utf-8")
     assert len(adapter.episodes("grocery-sort-v1")[0]["metadata_yaml"]) == METADATA_MAX_BYTES
+
+
+# --- what a service call has to set up ---------------------------------------
+
+#: A path that would run a second command if it reached a shell unquoted.
+HOSTILE_PATH = "/ws/setup.bash; id; echo '"
+
+
+def _service_command(adapter, monkeypatch) -> str:
+    seen = []
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda argv, **kw: seen.append(argv) or subprocess.CompletedProcess(argv, 0, "", ""),
+    )
+    adapter.stop()
+    return seen[0][-1]
+
+
+def test_a_service_call_sources_what_the_entrypoint_would_have(adapter, monkeypatch):
+    """`docker compose exec` skips the entrypoint, so `ros2` is not on PATH."""
+    assert "source /opt/ros/$ROS_DISTRO/setup.bash" in _service_command(adapter, monkeypatch)
+
+
+def test_a_service_call_sources_the_workspace_overlay(adapter, monkeypatch):
+    """anvil_msgs is built into the overlay, not the base install."""
+    assert "source /workspace/install/setup.bash" in _service_command(adapter, monkeypatch)
+
+
+def test_a_service_call_names_the_rmw_the_image_ships(adapter, monkeypatch):
+    """Fast DDS reaches the service and then fails decoding its reply."""
+    assert "RMW_IMPLEMENTATION=rmw_cyclonedds_cpp" in _service_command(adapter, monkeypatch)
+
+
+def test_a_service_call_runs_in_one_shell(adapter, monkeypatch):
+    """Sourcing and calling have to share a shell, or the sourcing buys nothing."""
+    seen = []
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda argv, **kw: seen.append(argv) or subprocess.CompletedProcess(argv, 0, "", ""),
+    )
+    adapter.stop()
+    assert seen[0][:7] == ["docker", "compose", "exec", "-T", "ros2", "bash", "-c"]
+
+
+def test_an_env_supplied_path_cannot_extend_the_command(adapter, monkeypatch):
+    """Config is closer to home than the fabric, and still not a place to trust."""
+    monkeypatch.setattr("fm_robot_agent.anvil.WORKSPACE_SETUP", HOSTILE_PATH)
+    called = _service_command(adapter, monkeypatch)
+    assert f"source {shlex.quote(HOSTILE_PATH)} &&" in called
+
+
+def test_an_env_supplied_rmw_cannot_extend_the_command(adapter, monkeypatch):
+    monkeypatch.setattr("fm_robot_agent.anvil.RMW", "rmw_x; id")
+    called = _service_command(adapter, monkeypatch)
+    assert "RMW_IMPLEMENTATION='rmw_x; id'" in called
