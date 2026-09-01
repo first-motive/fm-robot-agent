@@ -1,0 +1,2802 @@
+{
+  "advanced": {},
+  "advancedSchema": [
+    {
+      "key": "axol",
+      "label": "Axol",
+      "nodes": [
+        {
+          "children": [
+            {
+              "children": [
+                {
+                  "default": 40.0,
+                  "help": "Position stiffness for impedance control [0, 500].",
+                  "key": "axol.left.shoulder_1.kp",
+                  "kind": "field",
+                  "label": "kp",
+                  "options": null,
+                  "required": false,
+                  "type": "number"
+                },
+                {
+                  "default": 5.0,
+                  "help": "Velocity damping for impedance control. The motor clamps this to its firmware's range \u2014 5 on Damiao and legacy MyActuator, up to 50 on newer (V4.4+) MyActuator firmware (auto-detected on enable()). Use kd_soft to add damping beyond a motor's cap.",
+                  "key": "axol.left.shoulder_1.kd",
+                  "kind": "field",
+                  "label": "kd",
+                  "options": null,
+                  "required": false,
+                  "type": "number"
+                },
+                {
+                  "children": [
+                    {
+                      "default": 1.0191,
+                      "help": "Coulomb friction magnitude (Nm).",
+                      "key": "axol.left.shoulder_1.friction.fc",
+                      "kind": "field",
+                      "label": "fc",
+                      "options": null,
+                      "required": false,
+                      "type": "number"
+                    },
+                    {
+                      "default": 723.53,
+                      "help": "Tanh sharpness factor \u2014 larger is closer to a sign() function.",
+                      "key": "axol.left.shoulder_1.friction.k",
+                      "kind": "field",
+                      "label": "k",
+                      "options": null,
+                      "required": false,
+                      "type": "number"
+                    },
+                    {
+                      "default": 3.3848,
+                      "help": "Viscous friction coefficient (Nm\u00b7s/rad).",
+                      "key": "axol.left.shoulder_1.friction.fv",
+                      "kind": "field",
+                      "label": "fv",
+                      "options": null,
+                      "required": false,
+                      "type": "number"
+                    },
+                    {
+                      "default": 0.2853,
+                      "help": "Constant friction offset (Nm). Captures direction-independent biases such as imperfect gravity compensation or motor cogging.",
+                      "key": "axol.left.shoulder_1.friction.fo",
+                      "kind": "field",
+                      "label": "fo",
+                      "options": null,
+                      "required": false,
+                      "type": "number"
+                    }
+                  ],
+                  "help": "Parameters of the friction-compensation model.",
+                  "key": "axol.left.shoulder_1.friction",
+                  "kind": "group",
+                  "label": "friction"
+                },
+                {
+                  "default": 1.8,
+                  "help": "Mass of the body driven by this joint (kg). For wrist_3 this includes the gripper assembly (fixed-jointed to *_w2).",
+                  "key": "axol.left.shoulder_1.mass",
+                  "kind": "field",
+                  "label": "mass",
+                  "options": null,
+                  "required": false,
+                  "type": "number"
+                },
+                {
+                  "default": [
+                    0.0652231,
+                    0.0,
+                    0.0
+                  ],
+                  "help": "Centre of mass of the same body, in the body's URDF link frame (m).",
+                  "key": "axol.left.shoulder_1.com",
+                  "kind": "field",
+                  "label": "com",
+                  "options": null,
+                  "required": false,
+                  "type": "vector"
+                },
+                {
+                  "default": 1.27,
+                  "help": "Effective scalar inertia (kg\u00b7m\u00b2) for acceleration feedforward: \u03c4 = j_eff \u00b7 q\u0308_des is added to t_ff so inertia is not driven through tracking error.",
+                  "key": "axol.left.shoulder_1.j_eff",
+                  "kind": "field",
+                  "label": "j eff",
+                  "options": null,
+                  "required": false,
+                  "type": "number"
+                },
+                {
+                  "default": 5.0,
+                  "help": "Extra software velocity damping (Nm\u00b7s/rad) applied as \u03c4 = kd_soft \u00b7 (v_des \u2212 v_meas); mathematically equivalent to raising kd past the motor's firmware cap (e.g. past 5 on Damiao or legacy MyActuator firmware).",
+                  "key": "axol.left.shoulder_1.kd_soft",
+                  "kind": "field",
+                  "label": "kd soft",
+                  "options": null,
+                  "required": false,
+                  "type": "number"
+                }
+              ],
+              "help": null,
+              "key": "axol.left.shoulder_1",
+              "kind": "group",
+              "label": "shoulder 1"
+            },
+            {
+              "children": [
+                {
+                  "default": 50.0,
+                  "help": "Position stiffness for impedance control [0, 500].",
+                  "key": "axol.left.shoulder_2.kp",
+                  "kind": "field",
+                  "label": "kp",
+                  "options": null,
+                  "required": false,
+                  "type": "number"
+                },
+                {
+                  "default": 5.0,
+                  "help": "Velocity damping for impedance control. The motor clamps this to its firmware's range \u2014 5 on Damiao and legacy MyActuator, up to 50 on newer (V4.4+) MyActuator firmware (auto-detected on enable()). Use kd_soft to add damping beyond a motor's cap.",
+                  "key": "axol.left.shoulder_2.kd",
+                  "kind": "field",
+                  "label": "kd",
+                  "options": null,
+                  "required": false,
+                  "type": "number"
+                },
+                {
+                  "children": [
+                    {
+                      "default": 1.6873,
+                      "help": "Coulomb friction magnitude (Nm).",
+                      "key": "axol.left.shoulder_2.friction.fc",
+                      "kind": "field",
+                      "label": "fc",
+                      "options": null,
+                      "required": false,
+                      "type": "number"
+                    },
+                    {
+                      "default": 115.41,
+                      "help": "Tanh sharpness factor \u2014 larger is closer to a sign() function.",
+                      "key": "axol.left.shoulder_2.friction.k",
+                      "kind": "field",
+                      "label": "k",
+                      "options": null,
+                      "required": false,
+                      "type": "number"
+                    },
+                    {
+                      "default": 2.7202,
+                      "help": "Viscous friction coefficient (Nm\u00b7s/rad).",
+                      "key": "axol.left.shoulder_2.friction.fv",
+                      "kind": "field",
+                      "label": "fv",
+                      "options": null,
+                      "required": false,
+                      "type": "number"
+                    },
+                    {
+                      "default": -0.1701,
+                      "help": "Constant friction offset (Nm). Captures direction-independent biases such as imperfect gravity compensation or motor cogging.",
+                      "key": "axol.left.shoulder_2.friction.fo",
+                      "kind": "field",
+                      "label": "fo",
+                      "options": null,
+                      "required": false,
+                      "type": "number"
+                    }
+                  ],
+                  "help": "Parameters of the friction-compensation model.",
+                  "key": "axol.left.shoulder_2.friction",
+                  "kind": "group",
+                  "label": "friction"
+                },
+                {
+                  "default": 1.0,
+                  "help": "Mass of the body driven by this joint (kg). For wrist_3 this includes the gripper assembly (fixed-jointed to *_w2).",
+                  "key": "axol.left.shoulder_2.mass",
+                  "kind": "field",
+                  "label": "mass",
+                  "options": null,
+                  "required": false,
+                  "type": "number"
+                },
+                {
+                  "default": [
+                    0.0,
+                    0.0115864,
+                    -0.0302711
+                  ],
+                  "help": "Centre of mass of the same body, in the body's URDF link frame (m).",
+                  "key": "axol.left.shoulder_2.com",
+                  "kind": "field",
+                  "label": "com",
+                  "options": null,
+                  "required": false,
+                  "type": "vector"
+                },
+                {
+                  "default": 0.91,
+                  "help": "Effective scalar inertia (kg\u00b7m\u00b2) for acceleration feedforward: \u03c4 = j_eff \u00b7 q\u0308_des is added to t_ff so inertia is not driven through tracking error.",
+                  "key": "axol.left.shoulder_2.j_eff",
+                  "kind": "field",
+                  "label": "j eff",
+                  "options": null,
+                  "required": false,
+                  "type": "number"
+                },
+                {
+                  "default": 5.0,
+                  "help": "Extra software velocity damping (Nm\u00b7s/rad) applied as \u03c4 = kd_soft \u00b7 (v_des \u2212 v_meas); mathematically equivalent to raising kd past the motor's firmware cap (e.g. past 5 on Damiao or legacy MyActuator firmware).",
+                  "key": "axol.left.shoulder_2.kd_soft",
+                  "kind": "field",
+                  "label": "kd soft",
+                  "options": null,
+                  "required": false,
+                  "type": "number"
+                }
+              ],
+              "help": null,
+              "key": "axol.left.shoulder_2",
+              "kind": "group",
+              "label": "shoulder 2"
+            },
+            {
+              "children": [
+                {
+                  "default": 45.0,
+                  "help": "Position stiffness for impedance control [0, 500].",
+                  "key": "axol.left.shoulder_3.kp",
+                  "kind": "field",
+                  "label": "kp",
+                  "options": null,
+                  "required": false,
+                  "type": "number"
+                },
+                {
+                  "default": 1.0,
+                  "help": "Velocity damping for impedance control. The motor clamps this to its firmware's range \u2014 5 on Damiao and legacy MyActuator, up to 50 on newer (V4.4+) MyActuator firmware (auto-detected on enable()). Use kd_soft to add damping beyond a motor's cap.",
+                  "key": "axol.left.shoulder_3.kd",
+                  "kind": "field",
+                  "label": "kd",
+                  "options": null,
+                  "required": false,
+                  "type": "number"
+                },
+                {
+                  "children": [
+                    {
+                      "default": 0.5979,
+                      "help": "Coulomb friction magnitude (Nm).",
+                      "key": "axol.left.shoulder_3.friction.fc",
+                      "kind": "field",
+                      "label": "fc",
+                      "options": null,
+                      "required": false,
+                      "type": "number"
+                    },
+                    {
+                      "default": 106.56,
+                      "help": "Tanh sharpness factor \u2014 larger is closer to a sign() function.",
+                      "key": "axol.left.shoulder_3.friction.k",
+                      "kind": "field",
+                      "label": "k",
+                      "options": null,
+                      "required": false,
+                      "type": "number"
+                    },
+                    {
+                      "default": 2.1515,
+                      "help": "Viscous friction coefficient (Nm\u00b7s/rad).",
+                      "key": "axol.left.shoulder_3.friction.fv",
+                      "kind": "field",
+                      "label": "fv",
+                      "options": null,
+                      "required": false,
+                      "type": "number"
+                    },
+                    {
+                      "default": 0.0242,
+                      "help": "Constant friction offset (Nm). Captures direction-independent biases such as imperfect gravity compensation or motor cogging.",
+                      "key": "axol.left.shoulder_3.friction.fo",
+                      "kind": "field",
+                      "label": "fo",
+                      "options": null,
+                      "required": false,
+                      "type": "number"
+                    }
+                  ],
+                  "help": "Parameters of the friction-compensation model.",
+                  "key": "axol.left.shoulder_3.friction",
+                  "kind": "group",
+                  "label": "friction"
+                },
+                {
+                  "default": 3.75,
+                  "help": "Mass of the body driven by this joint (kg). For wrist_3 this includes the gripper assembly (fixed-jointed to *_w2).",
+                  "key": "axol.left.shoulder_3.mass",
+                  "kind": "field",
+                  "label": "mass",
+                  "options": null,
+                  "required": false,
+                  "type": "number"
+                },
+                {
+                  "default": [
+                    0.0,
+                    0.00286547,
+                    -0.164964
+                  ],
+                  "help": "Centre of mass of the same body, in the body's URDF link frame (m).",
+                  "key": "axol.left.shoulder_3.com",
+                  "kind": "field",
+                  "label": "com",
+                  "options": null,
+                  "required": false,
+                  "type": "vector"
+                },
+                {
+                  "default": 0.0,
+                  "help": "Effective scalar inertia (kg\u00b7m\u00b2) for acceleration feedforward: \u03c4 = j_eff \u00b7 q\u0308_des is added to t_ff so inertia is not driven through tracking error.",
+                  "key": "axol.left.shoulder_3.j_eff",
+                  "kind": "field",
+                  "label": "j eff",
+                  "options": null,
+                  "required": false,
+                  "type": "number"
+                },
+                {
+                  "default": 0.0,
+                  "help": "Extra software velocity damping (Nm\u00b7s/rad) applied as \u03c4 = kd_soft \u00b7 (v_des \u2212 v_meas); mathematically equivalent to raising kd past the motor's firmware cap (e.g. past 5 on Damiao or legacy MyActuator firmware).",
+                  "key": "axol.left.shoulder_3.kd_soft",
+                  "kind": "field",
+                  "label": "kd soft",
+                  "options": null,
+                  "required": false,
+                  "type": "number"
+                }
+              ],
+              "help": null,
+              "key": "axol.left.shoulder_3",
+              "kind": "group",
+              "label": "shoulder 3"
+            },
+            {
+              "children": [
+                {
+                  "default": 40.0,
+                  "help": "Position stiffness for impedance control [0, 500].",
+                  "key": "axol.left.elbow.kp",
+                  "kind": "field",
+                  "label": "kp",
+                  "options": null,
+                  "required": false,
+                  "type": "number"
+                },
+                {
+                  "default": 3.0,
+                  "help": "Velocity damping for impedance control. The motor clamps this to its firmware's range \u2014 5 on Damiao and legacy MyActuator, up to 50 on newer (V4.4+) MyActuator firmware (auto-detected on enable()). Use kd_soft to add damping beyond a motor's cap.",
+                  "key": "axol.left.elbow.kd",
+                  "kind": "field",
+                  "label": "kd",
+                  "options": null,
+                  "required": false,
+                  "type": "number"
+                },
+                {
+                  "children": [
+                    {
+                      "default": 0.6806,
+                      "help": "Coulomb friction magnitude (Nm).",
+                      "key": "axol.left.elbow.friction.fc",
+                      "kind": "field",
+                      "label": "fc",
+                      "options": null,
+                      "required": false,
+                      "type": "number"
+                    },
+                    {
+                      "default": 801.34,
+                      "help": "Tanh sharpness factor \u2014 larger is closer to a sign() function.",
+                      "key": "axol.left.elbow.friction.k",
+                      "kind": "field",
+                      "label": "k",
+                      "options": null,
+                      "required": false,
+                      "type": "number"
+                    },
+                    {
+                      "default": 0.8665,
+                      "help": "Viscous friction coefficient (Nm\u00b7s/rad).",
+                      "key": "axol.left.elbow.friction.fv",
+                      "kind": "field",
+                      "label": "fv",
+                      "options": null,
+                      "required": false,
+                      "type": "number"
+                    },
+                    {
+                      "default": -0.2496,
+                      "help": "Constant friction offset (Nm). Captures direction-independent biases such as imperfect gravity compensation or motor cogging.",
+                      "key": "axol.left.elbow.friction.fo",
+                      "kind": "field",
+                      "label": "fo",
+                      "options": null,
+                      "required": false,
+                      "type": "number"
+                    }
+                  ],
+                  "help": "Parameters of the friction-compensation model.",
+                  "key": "axol.left.elbow.friction",
+                  "kind": "group",
+                  "label": "friction"
+                },
+                {
+                  "default": 0.25,
+                  "help": "Mass of the body driven by this joint (kg). For wrist_3 this includes the gripper assembly (fixed-jointed to *_w2).",
+                  "key": "axol.left.elbow.mass",
+                  "kind": "field",
+                  "label": "mass",
+                  "options": null,
+                  "required": false,
+                  "type": "number"
+                },
+                {
+                  "default": [
+                    -0.0256064,
+                    0.0,
+                    -0.072044
+                  ],
+                  "help": "Centre of mass of the same body, in the body's URDF link frame (m).",
+                  "key": "axol.left.elbow.com",
+                  "kind": "field",
+                  "label": "com",
+                  "options": null,
+                  "required": false,
+                  "type": "vector"
+                },
+                {
+                  "default": 0.0,
+                  "help": "Effective scalar inertia (kg\u00b7m\u00b2) for acceleration feedforward: \u03c4 = j_eff \u00b7 q\u0308_des is added to t_ff so inertia is not driven through tracking error.",
+                  "key": "axol.left.elbow.j_eff",
+                  "kind": "field",
+                  "label": "j eff",
+                  "options": null,
+                  "required": false,
+                  "type": "number"
+                },
+                {
+                  "default": 0.0,
+                  "help": "Extra software velocity damping (Nm\u00b7s/rad) applied as \u03c4 = kd_soft \u00b7 (v_des \u2212 v_meas); mathematically equivalent to raising kd past the motor's firmware cap (e.g. past 5 on Damiao or legacy MyActuator firmware).",
+                  "key": "axol.left.elbow.kd_soft",
+                  "kind": "field",
+                  "label": "kd soft",
+                  "options": null,
+                  "required": false,
+                  "type": "number"
+                }
+              ],
+              "help": null,
+              "key": "axol.left.elbow",
+              "kind": "group",
+              "label": "elbow"
+            },
+            {
+              "children": [
+                {
+                  "default": 30.0,
+                  "help": "Position stiffness for impedance control [0, 500].",
+                  "key": "axol.left.wrist_1.kp",
+                  "kind": "field",
+                  "label": "kp",
+                  "options": null,
+                  "required": false,
+                  "type": "number"
+                },
+                {
+                  "default": 1.0,
+                  "help": "Velocity damping for impedance control. The motor clamps this to its firmware's range \u2014 5 on Damiao and legacy MyActuator, up to 50 on newer (V4.4+) MyActuator firmware (auto-detected on enable()). Use kd_soft to add damping beyond a motor's cap.",
+                  "key": "axol.left.wrist_1.kd",
+                  "kind": "field",
+                  "label": "kd",
+                  "options": null,
+                  "required": false,
+                  "type": "number"
+                },
+                {
+                  "children": [
+                    {
+                      "default": 0.5601,
+                      "help": "Coulomb friction magnitude (Nm).",
+                      "key": "axol.left.wrist_1.friction.fc",
+                      "kind": "field",
+                      "label": "fc",
+                      "options": null,
+                      "required": false,
+                      "type": "number"
+                    },
+                    {
+                      "default": 66.02,
+                      "help": "Tanh sharpness factor \u2014 larger is closer to a sign() function.",
+                      "key": "axol.left.wrist_1.friction.k",
+                      "kind": "field",
+                      "label": "k",
+                      "options": null,
+                      "required": false,
+                      "type": "number"
+                    },
+                    {
+                      "default": 1.2435,
+                      "help": "Viscous friction coefficient (Nm\u00b7s/rad).",
+                      "key": "axol.left.wrist_1.friction.fv",
+                      "kind": "field",
+                      "label": "fv",
+                      "options": null,
+                      "required": false,
+                      "type": "number"
+                    },
+                    {
+                      "default": 0.0504,
+                      "help": "Constant friction offset (Nm). Captures direction-independent biases such as imperfect gravity compensation or motor cogging.",
+                      "key": "axol.left.wrist_1.friction.fo",
+                      "kind": "field",
+                      "label": "fo",
+                      "options": null,
+                      "required": false,
+                      "type": "number"
+                    }
+                  ],
+                  "help": "Parameters of the friction-compensation model.",
+                  "key": "axol.left.wrist_1.friction",
+                  "kind": "group",
+                  "label": "friction"
+                },
+                {
+                  "default": 0.25,
+                  "help": "Mass of the body driven by this joint (kg). For wrist_3 this includes the gripper assembly (fixed-jointed to *_w2).",
+                  "key": "axol.left.wrist_1.mass",
+                  "kind": "field",
+                  "label": "mass",
+                  "options": null,
+                  "required": false,
+                  "type": "number"
+                },
+                {
+                  "default": [
+                    0.0,
+                    0.0,
+                    -0.0614121
+                  ],
+                  "help": "Centre of mass of the same body, in the body's URDF link frame (m).",
+                  "key": "axol.left.wrist_1.com",
+                  "kind": "field",
+                  "label": "com",
+                  "options": null,
+                  "required": false,
+                  "type": "vector"
+                },
+                {
+                  "default": 0.0,
+                  "help": "Effective scalar inertia (kg\u00b7m\u00b2) for acceleration feedforward: \u03c4 = j_eff \u00b7 q\u0308_des is added to t_ff so inertia is not driven through tracking error.",
+                  "key": "axol.left.wrist_1.j_eff",
+                  "kind": "field",
+                  "label": "j eff",
+                  "options": null,
+                  "required": false,
+                  "type": "number"
+                },
+                {
+                  "default": 0.0,
+                  "help": "Extra software velocity damping (Nm\u00b7s/rad) applied as \u03c4 = kd_soft \u00b7 (v_des \u2212 v_meas); mathematically equivalent to raising kd past the motor's firmware cap (e.g. past 5 on Damiao or legacy MyActuator firmware).",
+                  "key": "axol.left.wrist_1.kd_soft",
+                  "kind": "field",
+                  "label": "kd soft",
+                  "options": null,
+                  "required": false,
+                  "type": "number"
+                }
+              ],
+              "help": null,
+              "key": "axol.left.wrist_1",
+              "kind": "group",
+              "label": "wrist 1"
+            },
+            {
+              "children": [
+                {
+                  "default": 25.0,
+                  "help": "Position stiffness for impedance control [0, 500].",
+                  "key": "axol.left.wrist_2.kp",
+                  "kind": "field",
+                  "label": "kp",
+                  "options": null,
+                  "required": false,
+                  "type": "number"
+                },
+                {
+                  "default": 1.0,
+                  "help": "Velocity damping for impedance control. The motor clamps this to its firmware's range \u2014 5 on Damiao and legacy MyActuator, up to 50 on newer (V4.4+) MyActuator firmware (auto-detected on enable()). Use kd_soft to add damping beyond a motor's cap.",
+                  "key": "axol.left.wrist_2.kd",
+                  "kind": "field",
+                  "label": "kd",
+                  "options": null,
+                  "required": false,
+                  "type": "number"
+                },
+                {
+                  "children": [
+                    {
+                      "default": 0.2658,
+                      "help": "Coulomb friction magnitude (Nm).",
+                      "key": "axol.left.wrist_2.friction.fc",
+                      "kind": "field",
+                      "label": "fc",
+                      "options": null,
+                      "required": false,
+                      "type": "number"
+                    },
+                    {
+                      "default": 180.0,
+                      "help": "Tanh sharpness factor \u2014 larger is closer to a sign() function.",
+                      "key": "axol.left.wrist_2.friction.k",
+                      "kind": "field",
+                      "label": "k",
+                      "options": null,
+                      "required": false,
+                      "type": "number"
+                    },
+                    {
+                      "default": 0.9962,
+                      "help": "Viscous friction coefficient (Nm\u00b7s/rad).",
+                      "key": "axol.left.wrist_2.friction.fv",
+                      "kind": "field",
+                      "label": "fv",
+                      "options": null,
+                      "required": false,
+                      "type": "number"
+                    },
+                    {
+                      "default": 0.0691,
+                      "help": "Constant friction offset (Nm). Captures direction-independent biases such as imperfect gravity compensation or motor cogging.",
+                      "key": "axol.left.wrist_2.friction.fo",
+                      "kind": "field",
+                      "label": "fo",
+                      "options": null,
+                      "required": false,
+                      "type": "number"
+                    }
+                  ],
+                  "help": "Parameters of the friction-compensation model.",
+                  "key": "axol.left.wrist_2.friction",
+                  "kind": "group",
+                  "label": "friction"
+                },
+                {
+                  "default": 0.65,
+                  "help": "Mass of the body driven by this joint (kg). For wrist_3 this includes the gripper assembly (fixed-jointed to *_w2).",
+                  "key": "axol.left.wrist_2.mass",
+                  "kind": "field",
+                  "label": "mass",
+                  "options": null,
+                  "required": false,
+                  "type": "number"
+                },
+                {
+                  "default": [
+                    0.0,
+                    0.0285,
+                    -0.0285
+                  ],
+                  "help": "Centre of mass of the same body, in the body's URDF link frame (m).",
+                  "key": "axol.left.wrist_2.com",
+                  "kind": "field",
+                  "label": "com",
+                  "options": null,
+                  "required": false,
+                  "type": "vector"
+                },
+                {
+                  "default": 0.0,
+                  "help": "Effective scalar inertia (kg\u00b7m\u00b2) for acceleration feedforward: \u03c4 = j_eff \u00b7 q\u0308_des is added to t_ff so inertia is not driven through tracking error.",
+                  "key": "axol.left.wrist_2.j_eff",
+                  "kind": "field",
+                  "label": "j eff",
+                  "options": null,
+                  "required": false,
+                  "type": "number"
+                },
+                {
+                  "default": 0.0,
+                  "help": "Extra software velocity damping (Nm\u00b7s/rad) applied as \u03c4 = kd_soft \u00b7 (v_des \u2212 v_meas); mathematically equivalent to raising kd past the motor's firmware cap (e.g. past 5 on Damiao or legacy MyActuator firmware).",
+                  "key": "axol.left.wrist_2.kd_soft",
+                  "kind": "field",
+                  "label": "kd soft",
+                  "options": null,
+                  "required": false,
+                  "type": "number"
+                }
+              ],
+              "help": null,
+              "key": "axol.left.wrist_2",
+              "kind": "group",
+              "label": "wrist 2"
+            },
+            {
+              "children": [
+                {
+                  "default": 25.0,
+                  "help": "Position stiffness for impedance control [0, 500].",
+                  "key": "axol.left.wrist_3.kp",
+                  "kind": "field",
+                  "label": "kp",
+                  "options": null,
+                  "required": false,
+                  "type": "number"
+                },
+                {
+                  "default": 0.5,
+                  "help": "Velocity damping for impedance control. The motor clamps this to its firmware's range \u2014 5 on Damiao and legacy MyActuator, up to 50 on newer (V4.4+) MyActuator firmware (auto-detected on enable()). Use kd_soft to add damping beyond a motor's cap.",
+                  "key": "axol.left.wrist_3.kd",
+                  "kind": "field",
+                  "label": "kd",
+                  "options": null,
+                  "required": false,
+                  "type": "number"
+                },
+                {
+                  "children": [
+                    {
+                      "default": 0.1048,
+                      "help": "Coulomb friction magnitude (Nm).",
+                      "key": "axol.left.wrist_3.friction.fc",
+                      "kind": "field",
+                      "label": "fc",
+                      "options": null,
+                      "required": false,
+                      "type": "number"
+                    },
+                    {
+                      "default": 829.09,
+                      "help": "Tanh sharpness factor \u2014 larger is closer to a sign() function.",
+                      "key": "axol.left.wrist_3.friction.k",
+                      "kind": "field",
+                      "label": "k",
+                      "options": null,
+                      "required": false,
+                      "type": "number"
+                    },
+                    {
+                      "default": 0.5857,
+                      "help": "Viscous friction coefficient (Nm\u00b7s/rad).",
+                      "key": "axol.left.wrist_3.friction.fv",
+                      "kind": "field",
+                      "label": "fv",
+                      "options": null,
+                      "required": false,
+                      "type": "number"
+                    },
+                    {
+                      "default": 0.0638,
+                      "help": "Constant friction offset (Nm). Captures direction-independent biases such as imperfect gravity compensation or motor cogging.",
+                      "key": "axol.left.wrist_3.friction.fo",
+                      "kind": "field",
+                      "label": "fo",
+                      "options": null,
+                      "required": false,
+                      "type": "number"
+                    }
+                  ],
+                  "help": "Parameters of the friction-compensation model.",
+                  "key": "axol.left.wrist_3.friction",
+                  "kind": "group",
+                  "label": "friction"
+                },
+                {
+                  "default": 0.75,
+                  "help": "Mass of the body driven by this joint (kg). For wrist_3 this includes the gripper assembly (fixed-jointed to *_w2).",
+                  "key": "axol.left.wrist_3.mass",
+                  "kind": "field",
+                  "label": "mass",
+                  "options": null,
+                  "required": false,
+                  "type": "number"
+                },
+                {
+                  "default": [
+                    -0.0285,
+                    0.0,
+                    -0.089453
+                  ],
+                  "help": "Centre of mass of the same body, in the body's URDF link frame (m).",
+                  "key": "axol.left.wrist_3.com",
+                  "kind": "field",
+                  "label": "com",
+                  "options": null,
+                  "required": false,
+                  "type": "vector"
+                },
+                {
+                  "default": 0.0,
+                  "help": "Effective scalar inertia (kg\u00b7m\u00b2) for acceleration feedforward: \u03c4 = j_eff \u00b7 q\u0308_des is added to t_ff so inertia is not driven through tracking error.",
+                  "key": "axol.left.wrist_3.j_eff",
+                  "kind": "field",
+                  "label": "j eff",
+                  "options": null,
+                  "required": false,
+                  "type": "number"
+                },
+                {
+                  "default": 0.0,
+                  "help": "Extra software velocity damping (Nm\u00b7s/rad) applied as \u03c4 = kd_soft \u00b7 (v_des \u2212 v_meas); mathematically equivalent to raising kd past the motor's firmware cap (e.g. past 5 on Damiao or legacy MyActuator firmware).",
+                  "key": "axol.left.wrist_3.kd_soft",
+                  "kind": "field",
+                  "label": "kd soft",
+                  "options": null,
+                  "required": false,
+                  "type": "number"
+                }
+              ],
+              "help": null,
+              "key": "axol.left.wrist_3",
+              "kind": "group",
+              "label": "wrist 3"
+            }
+          ],
+          "help": "Per-joint config for the left arm.",
+          "key": "axol.left",
+          "kind": "group",
+          "label": "left"
+        },
+        {
+          "children": [
+            {
+              "children": [
+                {
+                  "default": 40.0,
+                  "help": "Position stiffness for impedance control [0, 500].",
+                  "key": "axol.right.shoulder_1.kp",
+                  "kind": "field",
+                  "label": "kp",
+                  "options": null,
+                  "required": false,
+                  "type": "number"
+                },
+                {
+                  "default": 5.0,
+                  "help": "Velocity damping for impedance control. The motor clamps this to its firmware's range \u2014 5 on Damiao and legacy MyActuator, up to 50 on newer (V4.4+) MyActuator firmware (auto-detected on enable()). Use kd_soft to add damping beyond a motor's cap.",
+                  "key": "axol.right.shoulder_1.kd",
+                  "kind": "field",
+                  "label": "kd",
+                  "options": null,
+                  "required": false,
+                  "type": "number"
+                },
+                {
+                  "children": [
+                    {
+                      "default": 1.039,
+                      "help": "Coulomb friction magnitude (Nm).",
+                      "key": "axol.right.shoulder_1.friction.fc",
+                      "kind": "field",
+                      "label": "fc",
+                      "options": null,
+                      "required": false,
+                      "type": "number"
+                    },
+                    {
+                      "default": 781.53,
+                      "help": "Tanh sharpness factor \u2014 larger is closer to a sign() function.",
+                      "key": "axol.right.shoulder_1.friction.k",
+                      "kind": "field",
+                      "label": "k",
+                      "options": null,
+                      "required": false,
+                      "type": "number"
+                    },
+                    {
+                      "default": 3.5425,
+                      "help": "Viscous friction coefficient (Nm\u00b7s/rad).",
+                      "key": "axol.right.shoulder_1.friction.fv",
+                      "kind": "field",
+                      "label": "fv",
+                      "options": null,
+                      "required": false,
+                      "type": "number"
+                    },
+                    {
+                      "default": 0.2861,
+                      "help": "Constant friction offset (Nm). Captures direction-independent biases such as imperfect gravity compensation or motor cogging.",
+                      "key": "axol.right.shoulder_1.friction.fo",
+                      "kind": "field",
+                      "label": "fo",
+                      "options": null,
+                      "required": false,
+                      "type": "number"
+                    }
+                  ],
+                  "help": "Parameters of the friction-compensation model.",
+                  "key": "axol.right.shoulder_1.friction",
+                  "kind": "group",
+                  "label": "friction"
+                },
+                {
+                  "default": 1.8,
+                  "help": "Mass of the body driven by this joint (kg). For wrist_3 this includes the gripper assembly (fixed-jointed to *_w2).",
+                  "key": "axol.right.shoulder_1.mass",
+                  "kind": "field",
+                  "label": "mass",
+                  "options": null,
+                  "required": false,
+                  "type": "number"
+                },
+                {
+                  "default": [
+                    -0.0652231,
+                    0.0,
+                    0.0
+                  ],
+                  "help": "Centre of mass of the same body, in the body's URDF link frame (m).",
+                  "key": "axol.right.shoulder_1.com",
+                  "kind": "field",
+                  "label": "com",
+                  "options": null,
+                  "required": false,
+                  "type": "vector"
+                },
+                {
+                  "default": 1.27,
+                  "help": "Effective scalar inertia (kg\u00b7m\u00b2) for acceleration feedforward: \u03c4 = j_eff \u00b7 q\u0308_des is added to t_ff so inertia is not driven through tracking error.",
+                  "key": "axol.right.shoulder_1.j_eff",
+                  "kind": "field",
+                  "label": "j eff",
+                  "options": null,
+                  "required": false,
+                  "type": "number"
+                },
+                {
+                  "default": 5.0,
+                  "help": "Extra software velocity damping (Nm\u00b7s/rad) applied as \u03c4 = kd_soft \u00b7 (v_des \u2212 v_meas); mathematically equivalent to raising kd past the motor's firmware cap (e.g. past 5 on Damiao or legacy MyActuator firmware).",
+                  "key": "axol.right.shoulder_1.kd_soft",
+                  "kind": "field",
+                  "label": "kd soft",
+                  "options": null,
+                  "required": false,
+                  "type": "number"
+                }
+              ],
+              "help": null,
+              "key": "axol.right.shoulder_1",
+              "kind": "group",
+              "label": "shoulder 1"
+            },
+            {
+              "children": [
+                {
+                  "default": 50.0,
+                  "help": "Position stiffness for impedance control [0, 500].",
+                  "key": "axol.right.shoulder_2.kp",
+                  "kind": "field",
+                  "label": "kp",
+                  "options": null,
+                  "required": false,
+                  "type": "number"
+                },
+                {
+                  "default": 5.0,
+                  "help": "Velocity damping for impedance control. The motor clamps this to its firmware's range \u2014 5 on Damiao and legacy MyActuator, up to 50 on newer (V4.4+) MyActuator firmware (auto-detected on enable()). Use kd_soft to add damping beyond a motor's cap.",
+                  "key": "axol.right.shoulder_2.kd",
+                  "kind": "field",
+                  "label": "kd",
+                  "options": null,
+                  "required": false,
+                  "type": "number"
+                },
+                {
+                  "children": [
+                    {
+                      "default": 1.6873,
+                      "help": "Coulomb friction magnitude (Nm).",
+                      "key": "axol.right.shoulder_2.friction.fc",
+                      "kind": "field",
+                      "label": "fc",
+                      "options": null,
+                      "required": false,
+                      "type": "number"
+                    },
+                    {
+                      "default": 115.41,
+                      "help": "Tanh sharpness factor \u2014 larger is closer to a sign() function.",
+                      "key": "axol.right.shoulder_2.friction.k",
+                      "kind": "field",
+                      "label": "k",
+                      "options": null,
+                      "required": false,
+                      "type": "number"
+                    },
+                    {
+                      "default": 2.7202,
+                      "help": "Viscous friction coefficient (Nm\u00b7s/rad).",
+                      "key": "axol.right.shoulder_2.friction.fv",
+                      "kind": "field",
+                      "label": "fv",
+                      "options": null,
+                      "required": false,
+                      "type": "number"
+                    },
+                    {
+                      "default": 0.1701,
+                      "help": "Constant friction offset (Nm). Captures direction-independent biases such as imperfect gravity compensation or motor cogging.",
+                      "key": "axol.right.shoulder_2.friction.fo",
+                      "kind": "field",
+                      "label": "fo",
+                      "options": null,
+                      "required": false,
+                      "type": "number"
+                    }
+                  ],
+                  "help": "Parameters of the friction-compensation model.",
+                  "key": "axol.right.shoulder_2.friction",
+                  "kind": "group",
+                  "label": "friction"
+                },
+                {
+                  "default": 1.0,
+                  "help": "Mass of the body driven by this joint (kg). For wrist_3 this includes the gripper assembly (fixed-jointed to *_w2).",
+                  "key": "axol.right.shoulder_2.mass",
+                  "kind": "field",
+                  "label": "mass",
+                  "options": null,
+                  "required": false,
+                  "type": "number"
+                },
+                {
+                  "default": [
+                    -0.0,
+                    0.0115864,
+                    -0.0302711
+                  ],
+                  "help": "Centre of mass of the same body, in the body's URDF link frame (m).",
+                  "key": "axol.right.shoulder_2.com",
+                  "kind": "field",
+                  "label": "com",
+                  "options": null,
+                  "required": false,
+                  "type": "vector"
+                },
+                {
+                  "default": 0.91,
+                  "help": "Effective scalar inertia (kg\u00b7m\u00b2) for acceleration feedforward: \u03c4 = j_eff \u00b7 q\u0308_des is added to t_ff so inertia is not driven through tracking error.",
+                  "key": "axol.right.shoulder_2.j_eff",
+                  "kind": "field",
+                  "label": "j eff",
+                  "options": null,
+                  "required": false,
+                  "type": "number"
+                },
+                {
+                  "default": 5.0,
+                  "help": "Extra software velocity damping (Nm\u00b7s/rad) applied as \u03c4 = kd_soft \u00b7 (v_des \u2212 v_meas); mathematically equivalent to raising kd past the motor's firmware cap (e.g. past 5 on Damiao or legacy MyActuator firmware).",
+                  "key": "axol.right.shoulder_2.kd_soft",
+                  "kind": "field",
+                  "label": "kd soft",
+                  "options": null,
+                  "required": false,
+                  "type": "number"
+                }
+              ],
+              "help": null,
+              "key": "axol.right.shoulder_2",
+              "kind": "group",
+              "label": "shoulder 2"
+            },
+            {
+              "children": [
+                {
+                  "default": 45.0,
+                  "help": "Position stiffness for impedance control [0, 500].",
+                  "key": "axol.right.shoulder_3.kp",
+                  "kind": "field",
+                  "label": "kp",
+                  "options": null,
+                  "required": false,
+                  "type": "number"
+                },
+                {
+                  "default": 1.0,
+                  "help": "Velocity damping for impedance control. The motor clamps this to its firmware's range \u2014 5 on Damiao and legacy MyActuator, up to 50 on newer (V4.4+) MyActuator firmware (auto-detected on enable()). Use kd_soft to add damping beyond a motor's cap.",
+                  "key": "axol.right.shoulder_3.kd",
+                  "kind": "field",
+                  "label": "kd",
+                  "options": null,
+                  "required": false,
+                  "type": "number"
+                },
+                {
+                  "children": [
+                    {
+                      "default": 0.4773,
+                      "help": "Coulomb friction magnitude (Nm).",
+                      "key": "axol.right.shoulder_3.friction.fc",
+                      "kind": "field",
+                      "label": "fc",
+                      "options": null,
+                      "required": false,
+                      "type": "number"
+                    },
+                    {
+                      "default": 91.37,
+                      "help": "Tanh sharpness factor \u2014 larger is closer to a sign() function.",
+                      "key": "axol.right.shoulder_3.friction.k",
+                      "kind": "field",
+                      "label": "k",
+                      "options": null,
+                      "required": false,
+                      "type": "number"
+                    },
+                    {
+                      "default": 1.8673,
+                      "help": "Viscous friction coefficient (Nm\u00b7s/rad).",
+                      "key": "axol.right.shoulder_3.friction.fv",
+                      "kind": "field",
+                      "label": "fv",
+                      "options": null,
+                      "required": false,
+                      "type": "number"
+                    },
+                    {
+                      "default": 0.0631,
+                      "help": "Constant friction offset (Nm). Captures direction-independent biases such as imperfect gravity compensation or motor cogging.",
+                      "key": "axol.right.shoulder_3.friction.fo",
+                      "kind": "field",
+                      "label": "fo",
+                      "options": null,
+                      "required": false,
+                      "type": "number"
+                    }
+                  ],
+                  "help": "Parameters of the friction-compensation model.",
+                  "key": "axol.right.shoulder_3.friction",
+                  "kind": "group",
+                  "label": "friction"
+                },
+                {
+                  "default": 3.75,
+                  "help": "Mass of the body driven by this joint (kg). For wrist_3 this includes the gripper assembly (fixed-jointed to *_w2).",
+                  "key": "axol.right.shoulder_3.mass",
+                  "kind": "field",
+                  "label": "mass",
+                  "options": null,
+                  "required": false,
+                  "type": "number"
+                },
+                {
+                  "default": [
+                    -0.0,
+                    0.00286547,
+                    -0.164964
+                  ],
+                  "help": "Centre of mass of the same body, in the body's URDF link frame (m).",
+                  "key": "axol.right.shoulder_3.com",
+                  "kind": "field",
+                  "label": "com",
+                  "options": null,
+                  "required": false,
+                  "type": "vector"
+                },
+                {
+                  "default": 0.0,
+                  "help": "Effective scalar inertia (kg\u00b7m\u00b2) for acceleration feedforward: \u03c4 = j_eff \u00b7 q\u0308_des is added to t_ff so inertia is not driven through tracking error.",
+                  "key": "axol.right.shoulder_3.j_eff",
+                  "kind": "field",
+                  "label": "j eff",
+                  "options": null,
+                  "required": false,
+                  "type": "number"
+                },
+                {
+                  "default": 0.0,
+                  "help": "Extra software velocity damping (Nm\u00b7s/rad) applied as \u03c4 = kd_soft \u00b7 (v_des \u2212 v_meas); mathematically equivalent to raising kd past the motor's firmware cap (e.g. past 5 on Damiao or legacy MyActuator firmware).",
+                  "key": "axol.right.shoulder_3.kd_soft",
+                  "kind": "field",
+                  "label": "kd soft",
+                  "options": null,
+                  "required": false,
+                  "type": "number"
+                }
+              ],
+              "help": null,
+              "key": "axol.right.shoulder_3",
+              "kind": "group",
+              "label": "shoulder 3"
+            },
+            {
+              "children": [
+                {
+                  "default": 40.0,
+                  "help": "Position stiffness for impedance control [0, 500].",
+                  "key": "axol.right.elbow.kp",
+                  "kind": "field",
+                  "label": "kp",
+                  "options": null,
+                  "required": false,
+                  "type": "number"
+                },
+                {
+                  "default": 3.0,
+                  "help": "Velocity damping for impedance control. The motor clamps this to its firmware's range \u2014 5 on Damiao and legacy MyActuator, up to 50 on newer (V4.4+) MyActuator firmware (auto-detected on enable()). Use kd_soft to add damping beyond a motor's cap.",
+                  "key": "axol.right.elbow.kd",
+                  "kind": "field",
+                  "label": "kd",
+                  "options": null,
+                  "required": false,
+                  "type": "number"
+                },
+                {
+                  "children": [
+                    {
+                      "default": 0.5255,
+                      "help": "Coulomb friction magnitude (Nm).",
+                      "key": "axol.right.elbow.friction.fc",
+                      "kind": "field",
+                      "label": "fc",
+                      "options": null,
+                      "required": false,
+                      "type": "number"
+                    },
+                    {
+                      "default": 159.25,
+                      "help": "Tanh sharpness factor \u2014 larger is closer to a sign() function.",
+                      "key": "axol.right.elbow.friction.k",
+                      "kind": "field",
+                      "label": "k",
+                      "options": null,
+                      "required": false,
+                      "type": "number"
+                    },
+                    {
+                      "default": 0.848,
+                      "help": "Viscous friction coefficient (Nm\u00b7s/rad).",
+                      "key": "axol.right.elbow.friction.fv",
+                      "kind": "field",
+                      "label": "fv",
+                      "options": null,
+                      "required": false,
+                      "type": "number"
+                    },
+                    {
+                      "default": 0.3607,
+                      "help": "Constant friction offset (Nm). Captures direction-independent biases such as imperfect gravity compensation or motor cogging.",
+                      "key": "axol.right.elbow.friction.fo",
+                      "kind": "field",
+                      "label": "fo",
+                      "options": null,
+                      "required": false,
+                      "type": "number"
+                    }
+                  ],
+                  "help": "Parameters of the friction-compensation model.",
+                  "key": "axol.right.elbow.friction",
+                  "kind": "group",
+                  "label": "friction"
+                },
+                {
+                  "default": 0.25,
+                  "help": "Mass of the body driven by this joint (kg). For wrist_3 this includes the gripper assembly (fixed-jointed to *_w2).",
+                  "key": "axol.right.elbow.mass",
+                  "kind": "field",
+                  "label": "mass",
+                  "options": null,
+                  "required": false,
+                  "type": "number"
+                },
+                {
+                  "default": [
+                    0.0256064,
+                    0.0,
+                    -0.072044
+                  ],
+                  "help": "Centre of mass of the same body, in the body's URDF link frame (m).",
+                  "key": "axol.right.elbow.com",
+                  "kind": "field",
+                  "label": "com",
+                  "options": null,
+                  "required": false,
+                  "type": "vector"
+                },
+                {
+                  "default": 0.0,
+                  "help": "Effective scalar inertia (kg\u00b7m\u00b2) for acceleration feedforward: \u03c4 = j_eff \u00b7 q\u0308_des is added to t_ff so inertia is not driven through tracking error.",
+                  "key": "axol.right.elbow.j_eff",
+                  "kind": "field",
+                  "label": "j eff",
+                  "options": null,
+                  "required": false,
+                  "type": "number"
+                },
+                {
+                  "default": 0.0,
+                  "help": "Extra software velocity damping (Nm\u00b7s/rad) applied as \u03c4 = kd_soft \u00b7 (v_des \u2212 v_meas); mathematically equivalent to raising kd past the motor's firmware cap (e.g. past 5 on Damiao or legacy MyActuator firmware).",
+                  "key": "axol.right.elbow.kd_soft",
+                  "kind": "field",
+                  "label": "kd soft",
+                  "options": null,
+                  "required": false,
+                  "type": "number"
+                }
+              ],
+              "help": null,
+              "key": "axol.right.elbow",
+              "kind": "group",
+              "label": "elbow"
+            },
+            {
+              "children": [
+                {
+                  "default": 30.0,
+                  "help": "Position stiffness for impedance control [0, 500].",
+                  "key": "axol.right.wrist_1.kp",
+                  "kind": "field",
+                  "label": "kp",
+                  "options": null,
+                  "required": false,
+                  "type": "number"
+                },
+                {
+                  "default": 1.0,
+                  "help": "Velocity damping for impedance control. The motor clamps this to its firmware's range \u2014 5 on Damiao and legacy MyActuator, up to 50 on newer (V4.4+) MyActuator firmware (auto-detected on enable()). Use kd_soft to add damping beyond a motor's cap.",
+                  "key": "axol.right.wrist_1.kd",
+                  "kind": "field",
+                  "label": "kd",
+                  "options": null,
+                  "required": false,
+                  "type": "number"
+                },
+                {
+                  "children": [
+                    {
+                      "default": 0.4415,
+                      "help": "Coulomb friction magnitude (Nm).",
+                      "key": "axol.right.wrist_1.friction.fc",
+                      "kind": "field",
+                      "label": "fc",
+                      "options": null,
+                      "required": false,
+                      "type": "number"
+                    },
+                    {
+                      "default": 80.96,
+                      "help": "Tanh sharpness factor \u2014 larger is closer to a sign() function.",
+                      "key": "axol.right.wrist_1.friction.k",
+                      "kind": "field",
+                      "label": "k",
+                      "options": null,
+                      "required": false,
+                      "type": "number"
+                    },
+                    {
+                      "default": 1.3184,
+                      "help": "Viscous friction coefficient (Nm\u00b7s/rad).",
+                      "key": "axol.right.wrist_1.friction.fv",
+                      "kind": "field",
+                      "label": "fv",
+                      "options": null,
+                      "required": false,
+                      "type": "number"
+                    },
+                    {
+                      "default": 0.0497,
+                      "help": "Constant friction offset (Nm). Captures direction-independent biases such as imperfect gravity compensation or motor cogging.",
+                      "key": "axol.right.wrist_1.friction.fo",
+                      "kind": "field",
+                      "label": "fo",
+                      "options": null,
+                      "required": false,
+                      "type": "number"
+                    }
+                  ],
+                  "help": "Parameters of the friction-compensation model.",
+                  "key": "axol.right.wrist_1.friction",
+                  "kind": "group",
+                  "label": "friction"
+                },
+                {
+                  "default": 0.25,
+                  "help": "Mass of the body driven by this joint (kg). For wrist_3 this includes the gripper assembly (fixed-jointed to *_w2).",
+                  "key": "axol.right.wrist_1.mass",
+                  "kind": "field",
+                  "label": "mass",
+                  "options": null,
+                  "required": false,
+                  "type": "number"
+                },
+                {
+                  "default": [
+                    -0.0,
+                    0.0,
+                    -0.0614121
+                  ],
+                  "help": "Centre of mass of the same body, in the body's URDF link frame (m).",
+                  "key": "axol.right.wrist_1.com",
+                  "kind": "field",
+                  "label": "com",
+                  "options": null,
+                  "required": false,
+                  "type": "vector"
+                },
+                {
+                  "default": 0.0,
+                  "help": "Effective scalar inertia (kg\u00b7m\u00b2) for acceleration feedforward: \u03c4 = j_eff \u00b7 q\u0308_des is added to t_ff so inertia is not driven through tracking error.",
+                  "key": "axol.right.wrist_1.j_eff",
+                  "kind": "field",
+                  "label": "j eff",
+                  "options": null,
+                  "required": false,
+                  "type": "number"
+                },
+                {
+                  "default": 0.0,
+                  "help": "Extra software velocity damping (Nm\u00b7s/rad) applied as \u03c4 = kd_soft \u00b7 (v_des \u2212 v_meas); mathematically equivalent to raising kd past the motor's firmware cap (e.g. past 5 on Damiao or legacy MyActuator firmware).",
+                  "key": "axol.right.wrist_1.kd_soft",
+                  "kind": "field",
+                  "label": "kd soft",
+                  "options": null,
+                  "required": false,
+                  "type": "number"
+                }
+              ],
+              "help": null,
+              "key": "axol.right.wrist_1",
+              "kind": "group",
+              "label": "wrist 1"
+            },
+            {
+              "children": [
+                {
+                  "default": 25.0,
+                  "help": "Position stiffness for impedance control [0, 500].",
+                  "key": "axol.right.wrist_2.kp",
+                  "kind": "field",
+                  "label": "kp",
+                  "options": null,
+                  "required": false,
+                  "type": "number"
+                },
+                {
+                  "default": 1.0,
+                  "help": "Velocity damping for impedance control. The motor clamps this to its firmware's range \u2014 5 on Damiao and legacy MyActuator, up to 50 on newer (V4.4+) MyActuator firmware (auto-detected on enable()). Use kd_soft to add damping beyond a motor's cap.",
+                  "key": "axol.right.wrist_2.kd",
+                  "kind": "field",
+                  "label": "kd",
+                  "options": null,
+                  "required": false,
+                  "type": "number"
+                },
+                {
+                  "children": [
+                    {
+                      "default": 0.188,
+                      "help": "Coulomb friction magnitude (Nm).",
+                      "key": "axol.right.wrist_2.friction.fc",
+                      "kind": "field",
+                      "label": "fc",
+                      "options": null,
+                      "required": false,
+                      "type": "number"
+                    },
+                    {
+                      "default": 813.44,
+                      "help": "Tanh sharpness factor \u2014 larger is closer to a sign() function.",
+                      "key": "axol.right.wrist_2.friction.k",
+                      "kind": "field",
+                      "label": "k",
+                      "options": null,
+                      "required": false,
+                      "type": "number"
+                    },
+                    {
+                      "default": 1.1331,
+                      "help": "Viscous friction coefficient (Nm\u00b7s/rad).",
+                      "key": "axol.right.wrist_2.friction.fv",
+                      "kind": "field",
+                      "label": "fv",
+                      "options": null,
+                      "required": false,
+                      "type": "number"
+                    },
+                    {
+                      "default": 0.0252,
+                      "help": "Constant friction offset (Nm). Captures direction-independent biases such as imperfect gravity compensation or motor cogging.",
+                      "key": "axol.right.wrist_2.friction.fo",
+                      "kind": "field",
+                      "label": "fo",
+                      "options": null,
+                      "required": false,
+                      "type": "number"
+                    }
+                  ],
+                  "help": "Parameters of the friction-compensation model.",
+                  "key": "axol.right.wrist_2.friction",
+                  "kind": "group",
+                  "label": "friction"
+                },
+                {
+                  "default": 0.65,
+                  "help": "Mass of the body driven by this joint (kg). For wrist_3 this includes the gripper assembly (fixed-jointed to *_w2).",
+                  "key": "axol.right.wrist_2.mass",
+                  "kind": "field",
+                  "label": "mass",
+                  "options": null,
+                  "required": false,
+                  "type": "number"
+                },
+                {
+                  "default": [
+                    -0.0,
+                    -0.0285,
+                    -0.0285
+                  ],
+                  "help": "Centre of mass of the same body, in the body's URDF link frame (m).",
+                  "key": "axol.right.wrist_2.com",
+                  "kind": "field",
+                  "label": "com",
+                  "options": null,
+                  "required": false,
+                  "type": "vector"
+                },
+                {
+                  "default": 0.0,
+                  "help": "Effective scalar inertia (kg\u00b7m\u00b2) for acceleration feedforward: \u03c4 = j_eff \u00b7 q\u0308_des is added to t_ff so inertia is not driven through tracking error.",
+                  "key": "axol.right.wrist_2.j_eff",
+                  "kind": "field",
+                  "label": "j eff",
+                  "options": null,
+                  "required": false,
+                  "type": "number"
+                },
+                {
+                  "default": 0.0,
+                  "help": "Extra software velocity damping (Nm\u00b7s/rad) applied as \u03c4 = kd_soft \u00b7 (v_des \u2212 v_meas); mathematically equivalent to raising kd past the motor's firmware cap (e.g. past 5 on Damiao or legacy MyActuator firmware).",
+                  "key": "axol.right.wrist_2.kd_soft",
+                  "kind": "field",
+                  "label": "kd soft",
+                  "options": null,
+                  "required": false,
+                  "type": "number"
+                }
+              ],
+              "help": null,
+              "key": "axol.right.wrist_2",
+              "kind": "group",
+              "label": "wrist 2"
+            },
+            {
+              "children": [
+                {
+                  "default": 25.0,
+                  "help": "Position stiffness for impedance control [0, 500].",
+                  "key": "axol.right.wrist_3.kp",
+                  "kind": "field",
+                  "label": "kp",
+                  "options": null,
+                  "required": false,
+                  "type": "number"
+                },
+                {
+                  "default": 0.5,
+                  "help": "Velocity damping for impedance control. The motor clamps this to its firmware's range \u2014 5 on Damiao and legacy MyActuator, up to 50 on newer (V4.4+) MyActuator firmware (auto-detected on enable()). Use kd_soft to add damping beyond a motor's cap.",
+                  "key": "axol.right.wrist_3.kd",
+                  "kind": "field",
+                  "label": "kd",
+                  "options": null,
+                  "required": false,
+                  "type": "number"
+                },
+                {
+                  "children": [
+                    {
+                      "default": 0.1137,
+                      "help": "Coulomb friction magnitude (Nm).",
+                      "key": "axol.right.wrist_3.friction.fc",
+                      "kind": "field",
+                      "label": "fc",
+                      "options": null,
+                      "required": false,
+                      "type": "number"
+                    },
+                    {
+                      "default": 852.61,
+                      "help": "Tanh sharpness factor \u2014 larger is closer to a sign() function.",
+                      "key": "axol.right.wrist_3.friction.k",
+                      "kind": "field",
+                      "label": "k",
+                      "options": null,
+                      "required": false,
+                      "type": "number"
+                    },
+                    {
+                      "default": 0.5843,
+                      "help": "Viscous friction coefficient (Nm\u00b7s/rad).",
+                      "key": "axol.right.wrist_3.friction.fv",
+                      "kind": "field",
+                      "label": "fv",
+                      "options": null,
+                      "required": false,
+                      "type": "number"
+                    },
+                    {
+                      "default": 0.0345,
+                      "help": "Constant friction offset (Nm). Captures direction-independent biases such as imperfect gravity compensation or motor cogging.",
+                      "key": "axol.right.wrist_3.friction.fo",
+                      "kind": "field",
+                      "label": "fo",
+                      "options": null,
+                      "required": false,
+                      "type": "number"
+                    }
+                  ],
+                  "help": "Parameters of the friction-compensation model.",
+                  "key": "axol.right.wrist_3.friction",
+                  "kind": "group",
+                  "label": "friction"
+                },
+                {
+                  "default": 0.75,
+                  "help": "Mass of the body driven by this joint (kg). For wrist_3 this includes the gripper assembly (fixed-jointed to *_w2).",
+                  "key": "axol.right.wrist_3.mass",
+                  "kind": "field",
+                  "label": "mass",
+                  "options": null,
+                  "required": false,
+                  "type": "number"
+                },
+                {
+                  "default": [
+                    0.0285,
+                    0.0,
+                    -0.089453
+                  ],
+                  "help": "Centre of mass of the same body, in the body's URDF link frame (m).",
+                  "key": "axol.right.wrist_3.com",
+                  "kind": "field",
+                  "label": "com",
+                  "options": null,
+                  "required": false,
+                  "type": "vector"
+                },
+                {
+                  "default": 0.0,
+                  "help": "Effective scalar inertia (kg\u00b7m\u00b2) for acceleration feedforward: \u03c4 = j_eff \u00b7 q\u0308_des is added to t_ff so inertia is not driven through tracking error.",
+                  "key": "axol.right.wrist_3.j_eff",
+                  "kind": "field",
+                  "label": "j eff",
+                  "options": null,
+                  "required": false,
+                  "type": "number"
+                },
+                {
+                  "default": 0.0,
+                  "help": "Extra software velocity damping (Nm\u00b7s/rad) applied as \u03c4 = kd_soft \u00b7 (v_des \u2212 v_meas); mathematically equivalent to raising kd past the motor's firmware cap (e.g. past 5 on Damiao or legacy MyActuator firmware).",
+                  "key": "axol.right.wrist_3.kd_soft",
+                  "kind": "field",
+                  "label": "kd soft",
+                  "options": null,
+                  "required": false,
+                  "type": "number"
+                }
+              ],
+              "help": null,
+              "key": "axol.right.wrist_3",
+              "kind": "group",
+              "label": "wrist 3"
+            }
+          ],
+          "help": "Per-joint config for the right arm.",
+          "key": "axol.right",
+          "kind": "group",
+          "label": "right"
+        },
+        {
+          "default": 0.5,
+          "help": "Maximum allowed change in any arm joint (rad) between consecutive motion_control calls. Commands that exceed this are dropped and a warning is logged. Set to float('inf') to disable.",
+          "key": "axol.max_step_rad",
+          "kind": "field",
+          "label": "max step rad",
+          "options": null,
+          "required": false,
+          "type": "number"
+        }
+      ]
+    },
+    {
+      "key": "vr_teleop",
+      "label": "Teleop",
+      "nodes": [
+        {
+          "default": 0.6283185307179586,
+          "help": "Average joint velocity (rad/s) of the worst-case joint during a return-to-rest move. The smoothstep profile gives a peak joint velocity of 1.5 * reset_speed. Determines the number of trajectory waypoints based on the distance to the rest pose, subject to reset_min_duration below.",
+          "key": "vr_teleop.reset_speed",
+          "kind": "field",
+          "label": "reset speed",
+          "options": null,
+          "required": false,
+          "type": "number"
+        },
+        {
+          "default": 1.5,
+          "help": "Floor (seconds) on the return-to-rest trajectory duration. Prevents near-rest starts from snapping home in a handful of frames and gives every reset a consistent minimum feel regardless of starting pose. Defaults to 1.5 s.",
+          "key": "vr_teleop.reset_min_duration",
+          "kind": "field",
+          "label": "reset min duration",
+          "options": null,
+          "required": false,
+          "type": "number"
+        },
+        {
+          "default": 50.0,
+          "help": "Cost weight penalising deviation from the reset target pose during collision-aware trajectory generation.",
+          "key": "vr_teleop.reset_rest_weight",
+          "kind": "field",
+          "label": "reset rest weight",
+          "options": null,
+          "required": false,
+          "type": "number"
+        },
+        {
+          "default": 100.0,
+          "help": "Cost weight penalising joint-limit violations during reset trajectory generation.",
+          "key": "vr_teleop.reset_limit_weight",
+          "kind": "field",
+          "label": "reset limit weight",
+          "options": null,
+          "required": false,
+          "type": "number"
+        },
+        {
+          "default": 0.025,
+          "help": "Minimum clearance (m) enforced between collision bodies during reset trajectory generation.",
+          "key": "vr_teleop.reset_collision_margin",
+          "kind": "field",
+          "label": "reset collision margin",
+          "options": null,
+          "required": false,
+          "type": "number"
+        },
+        {
+          "default": 100.0,
+          "help": "Cost weight on self-collision penalty during reset trajectory generation.",
+          "key": "vr_teleop.reset_collision_weight",
+          "kind": "field",
+          "label": "reset collision weight",
+          "options": null,
+          "required": false,
+          "type": "number"
+        },
+        {
+          "default": 10,
+          "help": "Maximum solver iterations per reset waypoint.",
+          "key": "vr_teleop.reset_max_iterations",
+          "kind": "field",
+          "label": "reset max iterations",
+          "options": null,
+          "required": false,
+          "type": "number"
+        },
+        {
+          "default": 0.25,
+          "help": "Velocity damping (Nm\u00b7s/rad) for the arm joints during the contact-fallback gravity-comp hold; same semantics as axol gravity-comp --kd. Defaults to 0.25.",
+          "key": "vr_teleop.reset_gravity_comp_kd",
+          "kind": "field",
+          "label": "reset gravity comp kd",
+          "options": null,
+          "required": false,
+          "type": "number"
+        },
+        {
+          "default": 0.6283185307179586,
+          "help": "Starting joint-velocity cap (rad/s) for the trapezoidal filter when teleop is first engaged after a rest-pose trajectory (startup or reset). Softens the transition from rest pose to the first IK target: the cap smoothsteps from this value up to teleop_max_vel over engage_duration seconds, so the arm starts gentle and opens up progressively (a hard restore used to release the error accumulated during the slow phase all at once). Defaults to reset_speed for a consistent feel.",
+          "key": "vr_teleop.engage_max_vel",
+          "kind": "field",
+          "label": "engage max vel",
+          "options": null,
+          "required": false,
+          "type": "number"
+        },
+        {
+          "default": 1.0,
+          "help": "Seconds over which the velocity cap ramps from engage_max_vel to teleop_max_vel after the post-rest engage rising edge.",
+          "key": "vr_teleop.engage_duration",
+          "kind": "field",
+          "label": "engage duration",
+          "options": null,
+          "required": false,
+          "type": "number"
+        },
+        {
+          "default": 6.283185307179586,
+          "help": "Maximum joint velocity (rad/s) enforced by the trapezoidal filter during normal teleoperation. Limits how fast any single joint can move toward a new IK target. Defaults to 1.0 rev/s (~360 \u00b0/s).",
+          "key": "vr_teleop.teleop_max_vel",
+          "kind": "field",
+          "label": "teleop max vel",
+          "options": null,
+          "required": false,
+          "type": "number"
+        },
+        {
+          "default": 21.991148575128552,
+          "help": "Maximum joint acceleration (rad/s\u00b2) enforced by the trapezoidal filter. Controls how quickly the commanded velocity ramps up or down. Defaults to 3.5 rev/s\u00b2 (~1260 \u00b0/s\u00b2), giving a ~0.3 s ramp from rest to full speed.",
+          "key": "vr_teleop.teleop_max_accel",
+          "kind": "field",
+          "label": "teleop max accel",
+          "options": null,
+          "required": false,
+          "type": "number"
+        },
+        {
+          "default": 0.3,
+          "help": "Blend factor for the exponential moving average applied to the IK output before the trapezoidal filter. Range (0, 1] where 1.0 disables smoothing. Lower values kill more high-frequency jitter at the cost of a small fixed lag (~(1-alpha)/alpha frames). Defaults to 0.3 (~20 ms lag at 120 Hz), favouring smoothness over minimum latency.",
+          "key": "vr_teleop.ik_alpha",
+          "kind": "field",
+          "label": "ik alpha",
+          "options": null,
+          "required": false,
+          "type": "number"
+        },
+        {
+          "default": 0.8,
+          "help": "Minimum cutoff frequency (Hz) for the One Euro Filter applied to raw VR controller positions, quaternions, and elbow positions before they enter the IK solver. This is the primary tremor / tracking-noise kill knob. Lower values give heavier smoothing at rest (more tremor rejection) at the cost of slightly more lag when still. Typical range: 0.5\u20133 Hz. Defaults to 0.8 Hz, favouring smoothness over minimum latency (the fixed-lag smoother in the VR server's pose interpolator does the heavy lifting upstream).",
+          "key": "vr_teleop.pose_min_cutoff",
+          "kind": "field",
+          "label": "pose min cutoff",
+          "options": null,
+          "required": false,
+          "type": "number"
+        },
+        {
+          "default": 2.0,
+          "help": "Speed coefficient for the One Euro Filter. Raises the filter cutoff proportionally to the signal's instantaneous speed, keeping the filter transparent during fast intentional moves. Increase if fast moves feel sticky. Defaults to 2.0 so the filter stays partially engaged during motion instead of opening fully and passing noise through.",
+          "key": "vr_teleop.pose_beta",
+          "kind": "field",
+          "label": "pose beta",
+          "options": null,
+          "required": false,
+          "type": "number"
+        },
+        {
+          "default": 0.5,
+          "help": "Auto-disengage when no VR pose frame has arrived for this many seconds while teleop is engaged \u2014 the operator left VR (headset doffed, session exited without pressing X/Y) or the link dropped. Without it the engage toggle survives the gap, so the next frames after re-entering VR are tracked against the old engage snapshot and the arms jerk toward wherever the controllers now are. After the disengage the arms hold position wherever they are \u2014 a lost link never moves the robot on its own \u2014 until the operator deliberately re-engages (a fresh engage snapshot, so motion resumes relative to the controllers' new pose) or presses reset. The headset streams poses at 72+ Hz while presenting, so anything beyond a few hundred ms is a real gap, not jitter. 0 disables the timeout. Defaults to 0.5 s.",
+          "key": "vr_teleop.disengage_timeout",
+          "kind": "field",
+          "label": "disengage timeout",
+          "options": null,
+          "required": false,
+          "type": "number"
+        }
+      ]
+    },
+    {
+      "key": "kinematics",
+      "label": "Kinematics",
+      "nodes": [
+        {
+          "default": 5.0,
+          "help": "Weight penalising deviation from the global preferred posture. Acts as a persistent attractor toward the home/rest configuration, preventing slow null-space drift (e.g. unnecessary shoulder twist).",
+          "key": "kinematics.posture_weight",
+          "kind": "field",
+          "label": "posture weight",
+          "options": null,
+          "required": false,
+          "type": "number"
+        },
+        {
+          "default": 0.05,
+          "help": "Weight rewarding configurations with high manipulability. The residual is a reciprocal barrier on the Yoshikawa index, bounded near singularities (saturating at index ~1e-2 rather than pyroki's 1e-6): the unbounded barrier gives ~1e9-scale Jacobian rows at a singular seed (e.g. an arm at the all-zero straight pose), whose float32 normal matrix is indefinite after rounding \u2014 cuSolver's Cholesky then NaNs, every LM step is rejected, and ik() silently returns its seed on GPU while CPU LAPACK survives by rounding luck.",
+          "key": "kinematics.manipulability_weight",
+          "kind": "field",
+          "label": "manipulability weight",
+          "options": null,
+          "required": false,
+          "type": "number"
+        },
+        {
+          "default": 75.0,
+          "help": "Weight penalising joint-limit violations.",
+          "key": "kinematics.limit_weight",
+          "kind": "field",
+          "label": "limit weight",
+          "options": null,
+          "required": false,
+          "type": "number"
+        },
+        {
+          "default": 0.025,
+          "help": "Minimum clearance (m) enforced between collision bodies. Keep this below the arm-torso clearance of normal teleop poses: a margin that is already violated at the folded rest pose (e.g. the old 0.1 default) keeps the nonsmooth collision hinge active during ordinary tracking, which makes the trust-region solver reject steps \u2014 the arm freezes while small target errors accumulate, then lurches once the error is large enough to punch through (the teleop \"stuck, then jumps\" failure). 0.025 matches VRTeleopConfig.reset_collision_margin. This value is the *ceiling*: each pair's actual activation distance is derived from its home-pose clearance (clamped between the solver's 8 mm floor and this value), so pairs that normally operate near their shell \u2014 the wrists and grippers passing 10-17 mm from the base during close-over-table work, the elbow capsules grazing at rest \u2014 stay silent in their ordinary envelope instead of holding the cost hinge active there (measured at up to 59% of frames in recorded deburring sessions, which pulsed weight-150 gradients into the arm as path-specific jitter).",
+          "key": "kinematics.self_collision_margin",
+          "kind": "field",
+          "label": "self collision margin",
+          "options": null,
+          "required": false,
+          "type": "number"
+        },
+        {
+          "default": 150.0,
+          "help": "Weight on the self-collision penalty. 150 was set by replaying recorded close-to-body teleop episodes through the solver offline: at 75 the task cost dragged the elbow up to 7 mm inside the capsule surface during deburring-style work; at 150 the worst dip is +0.3 mm at a cost of +0.7% jerk and no change in EE error, freezes, or solve time.",
+          "key": "kinematics.self_collision_weight",
+          "kind": "field",
+          "label": "self collision weight",
+          "options": null,
+          "required": false,
+          "type": "number"
+        },
+        {
+          "default": 8,
+          "help": "Maximum solver iterations per call.",
+          "key": "kinematics.max_iterations",
+          "kind": "field",
+          "label": "max iterations",
+          "options": null,
+          "required": false,
+          "type": "number"
+        },
+        {
+          "default": 0.0001,
+          "help": "Solver convergence tolerance \u2014 terminate when the relative cost change of an iteration falls below this. jaxls also applies it to *rejected* proposals (whose cost change is ~0), so a loose value (the old 1e-2) makes one rejected step read as \"converged\" and return the seed unchanged. Keep it small enough that only genuine convergence trips it.",
+          "key": "kinematics.cost_tolerance",
+          "kind": "field",
+          "label": "cost tolerance",
+          "options": null,
+          "required": false,
+          "type": "number"
+        },
+        {
+          "default": 0.01,
+          "help": "Initial Levenberg-Marquardt damping. The per-tick solve re-seeds from the previous solution, so the first proposal is taken in a region where the linearisation may be poor (e.g. with the self-collision cost active); a moderately damped start gets an acceptable step in fewer rejections than the jaxls default (5e-4).",
+          "key": "kinematics.lambda_initial",
+          "kind": "field",
+          "label": "lambda initial",
+          "options": null,
+          "required": false,
+          "type": "number"
+        },
+        {
+          "default": 10.0,
+          "help": "Multiplier applied to the LM damping after each rejected step. With the jaxls default (2.0) and max_iterations of 8, damping can only grow 256x per solve \u2014 not enough to recover from a rejected near-Gauss-Newton step near an active collision constraint, so the solver used to return its seed unchanged for many consecutive ticks (teleop froze) and then lurch once the accumulated target error finally made a full step acceptable. 10.0 spans the useful damping range within the iteration budget.",
+          "key": "kinematics.lambda_factor",
+          "kind": "field",
+          "label": "lambda factor",
+          "options": null,
+          "required": false,
+          "type": "number"
+        },
+        {
+          "default": 0.82,
+          "help": "Asymptotic cap (m) on the distance from shoulder to end-effector target. Targets are *soft*-clamped: unchanged below reach_soft_start, then smoothly saturated so they approach but never reach max_reach. This is a runaway-target guard only: the arm's true straight-elbow boundary measured from the shoulder frame is *direction-dependent* (~0.69 m in the worst directions, ~0.78 m reaching forward, because the shoulder joint axes do not intersect the s2 link origin), so no fixed sphere can hug it \u2014 a cap tight enough to protect one direction amputates several cm of legitimate reach in another. Smoothness at the extension boundary is instead handled by the manipulability-keyed adaptive damping, which reads the actual Jacobian and therefore knows the real boundary in every direction.",
+          "key": "kinematics.max_reach",
+          "kind": "field",
+          "label": "max reach",
+          "options": null,
+          "required": false,
+          "type": "number"
+        },
+        {
+          "default": 0.78,
+          "help": "Distance (m) from the shoulder at which the reach soft-clamp starts to engage. The mapping is C1-smooth (identity slope at the knee), so crossing it introduces no velocity discontinuity in the target. Set at the arm's maximum physical straight-elbow distance so it only ever engages on targets beyond any reachable pose.",
+          "key": "kinematics.reach_soft_start",
+          "kind": "field",
+          "label": "reach soft start",
+          "options": null,
+          "required": false,
+          "type": "number"
+        },
+        {
+          "default": 0.015,
+          "help": "Translational (Yoshikawa) manipulability below which per-arm adaptive damping ramps in. Calibrated values for this arm: ~0.027 at rest, ~0.037 mid-workspace, ~0.009 at 7 degrees from elbow-straight, ~0 at the singularity \u2014 0.015 keeps damping fully off in normal use and fully on at the boundary.",
+          "key": "kinematics.manip_damping_threshold",
+          "kind": "field",
+          "label": "manip damping threshold",
+          "options": null,
+          "required": false,
+          "type": "number"
+        },
+        {
+          "default": 60.0,
+          "help": "Extra rest-cost weight added to an arm's joints at zero manipulability. Ramps quadratically from 0 at manip_damping_threshold (Chiaverini-style damped least squares), slowing the solver smoothly near singular configurations instead of letting it thrash or lurch. 0 disables.",
+          "key": "kinematics.manip_damping_boost",
+          "kind": "field",
+          "label": "manip damping boost",
+          "options": null,
+          "required": false,
+          "type": "number"
+        },
+        {
+          "default": 0.12,
+          "help": "Distance (rad) from a joint limit inside which that joint's rest-cost damping ramps in (quadratically, reaching manip_damping_boost at the limit). Gated on approach: only a joint *moving toward* its nearby limit is damped \u2014 one parked against a limit by task pressure (a wrist during ordinary manipulation) stays free, so the damping can't fight the task. Per-joint, so one joint brushing a limit never slows the rest of the arm.",
+          "key": "kinematics.limit_damping_margin",
+          "kind": "field",
+          "label": "limit damping margin",
+          "options": null,
+          "required": false,
+          "type": "number"
+        },
+        {
+          "default": 0.15,
+          "help": "Height band (m) above the shoulder over which the elbow-hint weight fades to zero. The headset's body-model elbow is inferred (not tracked) and becomes unreliable when the hands work at or above shoulder height \u2014 fading it out stops garbage swivel targets from thrashing the null space exactly where the shoulder nears its joint limits.",
+          "key": "kinematics.elbow_fade_band",
+          "kind": "field",
+          "label": "elbow fade band",
+          "options": null,
+          "required": false,
+          "type": "number"
+        }
+      ]
+    },
+    {
+      "key": "cart",
+      "label": "Cart",
+      "nodes": [
+        {
+          "default": "can_alm_axol_b",
+          "help": "SocketCAN interface for the wheel motors. None disables the wheels entirely (lift-only cart).",
+          "key": "cart.channel",
+          "kind": "field",
+          "label": "channel",
+          "options": null,
+          "required": false,
+          "type": "text"
+        },
+        {
+          "default": 20.0,
+          "help": "Peak wheel speed (rad/s) at a full-deflection command.",
+          "key": "cart.max_speed",
+          "kind": "field",
+          "label": "max speed",
+          "options": null,
+          "required": false,
+          "type": "number"
+        },
+        {
+          "default": 1.0,
+          "help": "Rotation weight relative to translation, in [0, 1].",
+          "key": "cart.turn_scale",
+          "kind": "field",
+          "label": "turn scale",
+          "options": null,
+          "required": false,
+          "type": "number"
+        },
+        {
+          "default": 0.5,
+          "help": "Max change of the normalized body command per second; limits accel/decel so command steps ramp the wheels. The default takes 2s from rest to full deflection.",
+          "key": "cart.slew",
+          "kind": "field",
+          "label": "slew",
+          "options": null,
+          "required": false,
+          "type": "number"
+        },
+        {
+          "default": 15.0,
+          "help": "Translation headings within this many degrees of a cardinal axis (forward/back/left/right) are snapped onto that axis, absorbing off-axis thumb error during stick flicks so a \"straight\" command drives exactly straight. 0 disables. Deliberate diagonals (further off-axis than this) pass through unchanged.",
+          "key": "cart.axis_snap_deg",
+          "kind": "field",
+          "label": "axis snap deg",
+          "options": null,
+          "required": false,
+          "type": "number"
+        },
+        {
+          "default": false,
+          "help": "Use the carrier board's BMI088 as the yaw reference for the heading hold (wired by teleop; see almond_axol.robot.gyro). Independent of the cameras \u2014 the overhead ZED keeps its gst pipeline.",
+          "key": "cart.imu",
+          "kind": "field",
+          "label": "imu",
+          "options": null,
+          "required": false,
+          "type": "boolean"
+        },
+        {
+          "default": 2.0,
+          "help": "Heading-hold feedback gain, normalized wz per rad of heading error. While translating without a commanded rotation, the yaw rate fed via Cart.feed_yaw_rate is integrated into a heading error that is steered back to zero. 0 disables; a *negative* gain compensates a sensor whose sign convention is inverted. Idle no-op unless yaw rates are actually fed (and fresh).",
+          "key": "cart.yaw_hold_gain",
+          "kind": "field",
+          "label": "yaw hold gain",
+          "options": null,
+          "required": false,
+          "type": "number"
+        },
+        {
+          "default": 0.3,
+          "help": "Clamp on the heading-hold correction (normalized wz).",
+          "key": "cart.yaw_hold_max",
+          "kind": "field",
+          "label": "yaw hold max",
+          "options": null,
+          "required": false,
+          "type": "number"
+        },
+        {
+          "default": false,
+          "help": "Trace the heading hold: a 10 Hz state line while the cart translates and a per-stroke summary of the heading it actually drifted (see _YawLog). For diagnosing drift; off in normal operation.",
+          "key": "cart.yaw_log",
+          "kind": "field",
+          "label": "yaw log",
+          "options": null,
+          "required": false,
+          "type": "boolean"
+        },
+        {
+          "default": 0.15,
+          "help": "Stick deadzone (fraction of full deflection) applied by input frontends (VR thumbsticks, gamepad).",
+          "key": "cart.deadzone",
+          "kind": "field",
+          "label": "deadzone",
+          "options": null,
+          "required": false,
+          "type": "number"
+        },
+        {
+          "default": 60.0,
+          "help": "Position stiffness (Nm/rad) of the parked MIT hold; 0 disables parking (wheels just idle in velocity mode).",
+          "key": "cart.hold_kp",
+          "kind": "field",
+          "label": "hold kp",
+          "options": null,
+          "required": false,
+          "type": "number"
+        },
+        {
+          "default": 1.5,
+          "help": "Damping (Nm\u00b7s/rad) of the parked MIT hold.",
+          "key": "cart.hold_kd",
+          "kind": "field",
+          "label": "hold kd",
+          "options": null,
+          "required": false,
+          "type": "number"
+        },
+        {
+          "default": 50.0,
+          "help": "Wheel command task rate in Hz.",
+          "key": "cart.frequency",
+          "kind": "field",
+          "label": "frequency",
+          "options": null,
+          "required": false,
+          "type": "number"
+        },
+        {
+          "default": 0.3,
+          "help": "Seconds without a fresh Cart.set_command before the target is forced to zero (and the lift stopped). Protects against a dead command source.",
+          "key": "cart.command_timeout",
+          "kind": "field",
+          "label": "command timeout",
+          "options": null,
+          "required": false,
+          "type": "number"
+        },
+        {
+          "default": true,
+          "help": "Whether the telescoping lift is present. Its driver is a no-op until the lift PCB lands, so this only decides whether lift commands are routed at all.",
+          "key": "cart.lift",
+          "kind": "field",
+          "label": "lift",
+          "options": null,
+          "required": false,
+          "type": "boolean"
+        }
+      ]
+    },
+    {
+      "key": "vr_server",
+      "label": "VR server",
+      "nodes": [
+        {
+          "default": 8000,
+          "help": "Port to listen on. Defaults to the shared VR_PORT so the Quest-over-USB adb reverse tunnel always targets the same port the server binds.",
+          "key": "vr_server.port",
+          "kind": "field",
+          "label": "port",
+          "options": null,
+          "required": false,
+          "type": "number"
+        },
+        {
+          "default": null,
+          "help": "Path to TLS certificate. None uses the auto-generated cert in ~/.almond/vr/certs/.",
+          "key": "vr_server.certfile",
+          "kind": "field",
+          "label": "certfile",
+          "options": null,
+          "required": false,
+          "type": "text"
+        },
+        {
+          "default": null,
+          "help": "Path to TLS private key. None uses the auto-generated key in ~/.almond/vr/certs/.",
+          "key": "vr_server.keyfile",
+          "kind": "field",
+          "label": "keyfile",
+          "options": null,
+          "required": false,
+          "type": "text"
+        },
+        {
+          "default": true,
+          "help": "Reconstruct a smooth pose stream from jittery/batched arrivals via an adaptive playout buffer (see almond_axol.vr.interp.PoseInterpolator). When False the consumer sees the raw latest-wins frame.",
+          "key": "vr_server.interp_enabled",
+          "kind": "field",
+          "label": "interp enabled",
+          "options": null,
+          "required": false,
+          "type": "boolean"
+        },
+        {
+          "default": 0.0,
+          "help": "Floor on the adaptive playout delay (seconds).",
+          "key": "vr_server.interp_min_delay_s",
+          "kind": "field",
+          "label": "interp min delay s",
+          "options": null,
+          "required": false,
+          "type": "number"
+        },
+        {
+          "default": 0.15,
+          "help": "Cap on the adaptive playout delay (seconds); bounds the teleop latency added in exchange for smoothness.",
+          "key": "vr_server.interp_max_delay_s",
+          "kind": "field",
+          "label": "interp max delay s",
+          "options": null,
+          "required": false,
+          "type": "number"
+        },
+        {
+          "default": 0.12,
+          "help": "Width (seconds) of the Gaussian fixed-lag smoothing window rendered around the playout point. Adds a fixed window / 2 of latency in exchange for zero-phase smoothing and tracking-glitch rejection (glitches shorter than ~half the window are dropped entirely). 0 disables smoothing and restores the plain two-frame lerp.",
+          "key": "vr_server.interp_smooth_window_s",
+          "kind": "field",
+          "label": "interp smooth window s",
+          "options": null,
+          "required": false,
+          "type": "number"
+        },
+        {
+          "default": 4.0,
+          "help": "Hampel outlier threshold in robust standard deviations for the glitch rejection inside the smoothing window. Lower is more aggressive. <= 0 disables rejection.",
+          "key": "vr_server.interp_outlier_k",
+          "kind": "field",
+          "label": "interp outlier k",
+          "options": null,
+          "required": false,
+          "type": "number"
+        }
+      ]
+    }
+  ],
+  "cameras": null,
+  "schema": [
+    {
+      "description": "Arm behaviour shared by every operation on this robot.",
+      "key": "robot",
+      "label": "Robot",
+      "settings": [
+        {
+          "default": 0.5,
+          "defaultText": null,
+          "help": "Compliance \u2194 stiffness blend in [0, 1] for the left arm. Match the value used at data-collection time when running a policy.",
+          "key": "robot.left_stiffness",
+          "label": "Left arm stiffness",
+          "options": null,
+          "type": "number",
+          "ui": {
+            "max": 1,
+            "min": 0,
+            "step": 0.05,
+            "widget": "slider"
+          }
+        },
+        {
+          "default": 0.5,
+          "defaultText": null,
+          "help": "Compliance \u2194 stiffness blend in [0, 1] for the right arm.",
+          "key": "robot.right_stiffness",
+          "label": "Right arm stiffness",
+          "options": null,
+          "type": "number",
+          "ui": {
+            "max": 1,
+            "min": 0,
+            "step": 0.05,
+            "widget": "slider"
+          }
+        },
+        {
+          "default": "can_alm_axol_l",
+          "defaultText": null,
+          "help": "SocketCAN interface for the left arm (e.g. can_alm_axol_l, or can0 for a non-Axol-hub adapter). 'null' disables the arm. Also used by the diagnostics dashboard's robot link.",
+          "key": "robot.left_channel",
+          "label": "Left arm CAN channel",
+          "options": null,
+          "type": "text",
+          "ui": {}
+        },
+        {
+          "default": "can_alm_axol_r",
+          "defaultText": null,
+          "help": "SocketCAN interface for the right arm (e.g. can_alm_axol_r, or can1 for a non-Axol-hub adapter). 'null' disables the arm. Also used by the diagnostics dashboard's robot link.",
+          "key": "robot.right_channel",
+          "label": "Right arm CAN channel",
+          "options": null,
+          "type": "text",
+          "ui": {}
+        },
+        {
+          "default": true,
+          "defaultText": null,
+          "help": "This robot is the gripper-equipped SKU. Turn off for the gripperless SKU: the gripper motors are never enabled or calibrated, gripper commands are ignored, and gripper channels are dropped from recorded datasets. The gripper torque/speed settings below then have no effect.",
+          "key": "robot.has_gripper",
+          "label": "Grippers fitted",
+          "options": null,
+          "type": "boolean",
+          "ui": {}
+        },
+        {
+          "default": 0.5,
+          "defaultText": null,
+          "help": "Peak gripper output torque, applied to both grippers.",
+          "key": "robot.gripper_torque_limit",
+          "label": "Gripper torque limit (Nm)",
+          "options": null,
+          "type": "number",
+          "ui": {}
+        },
+        {
+          "default": 10.0,
+          "defaultText": null,
+          "help": "Maximum gripper joint speed, applied to both grippers.",
+          "key": "robot.gripper_max_speed",
+          "label": "Gripper max speed (rad/s)",
+          "options": null,
+          "type": "number",
+          "ui": {}
+        },
+        {
+          "default": false,
+          "defaultText": null,
+          "help": "This robot has the powered cart (x-drive omni base + telescoping lift). The headset thumbsticks then drive it during teleop and data collection: left stick translates, right stick x rotates, stick clicks run the lift. Operator mobility only \u2014 cart motion is never recorded into datasets and policies never control it. Cart parameters live under Advanced \u2192 Cart.",
+          "key": "robot.cart_enabled",
+          "label": "Powered cart",
+          "options": null,
+          "type": "boolean",
+          "ui": {}
+        },
+        {
+          "default": 4.0,
+          "defaultText": null,
+          "help": "Contact watchdog for every return-to-rest move: a joint torque this far (Nm) from the gravity model, sustained, stops the move and drops the arms into a limp gravity-comp hold \u2014 free them by hand, then press reset (VR) or continue (panel/terminal) to replan from where they are. Raise if normal returns false-trip; 0 disables the watchdog.",
+          "key": "robot.reset_torque_threshold",
+          "label": "Reset contact threshold (Nm)",
+          "options": null,
+          "type": "number",
+          "ui": {}
+        },
+        {
+          "default": 0.25,
+          "defaultText": null,
+          "help": "Velocity damping applied to freed joints in gravity comp.",
+          "key": "robot.gravity_kd",
+          "label": "Gravity comp damping (kd)",
+          "options": null,
+          "type": "number",
+          "ui": {}
+        },
+        {
+          "default": 250.0,
+          "defaultText": null,
+          "help": "Gravity compensation control-loop rate.",
+          "key": "robot.gravity_rate_hz",
+          "label": "Gravity comp rate (Hz)",
+          "options": null,
+          "type": "number",
+          "ui": {}
+        },
+        {
+          "default": 500.0,
+          "defaultText": null,
+          "help": "Background motor telemetry rate during gravity compensation.",
+          "key": "robot.gravity_telemetry_hz",
+          "label": "Gravity telemetry rate (Hz)",
+          "options": null,
+          "type": "number",
+          "ui": {}
+        }
+      ]
+    },
+    {
+      "description": "How VR controller motion drives the arms (teleop and data collection).",
+      "key": "teleop",
+      "label": "Teleop & VR",
+      "settings": [
+        {
+          "default": 120.0,
+          "defaultText": null,
+          "help": "Control-loop rate for VR teleoperation (whole Hz).",
+          "key": "teleop.frequency",
+          "label": "Teleop rate (Hz)",
+          "options": null,
+          "type": "number",
+          "ui": {}
+        },
+        {
+          "default": 1.0,
+          "defaultText": null,
+          "help": "Scale factor from controller motion to end-effector motion (1 = 1:1; larger covers more workspace with less hand travel).",
+          "key": "teleop.position_multiplier",
+          "label": "Position multiplier",
+          "options": null,
+          "type": "number",
+          "ui": {
+            "max": 3,
+            "min": 0.5,
+            "step": 0.1,
+            "widget": "slider"
+          }
+        },
+        {
+          "default": 1.0,
+          "defaultText": null,
+          "help": "Scale factor from wrist rotation to end-effector rotation (1 = 1:1; larger rotates further with less wrist twist).",
+          "key": "teleop.rotation_multiplier",
+          "label": "Rotation multiplier",
+          "options": null,
+          "type": "number",
+          "ui": {
+            "max": 3,
+            "min": 0.5,
+            "step": 0.1,
+            "widget": "slider"
+          }
+        },
+        {
+          "default": [
+            -0.15707963705062866,
+            0.0,
+            0.0,
+            0.3141592741012573,
+            0.0,
+            0.0,
+            -0.15707963705062866
+          ],
+          "defaultText": null,
+          "help": "Left arm rest/start configuration in radians, 7 joints in ARM_JOINTS order. Edited with the pose editor.",
+          "key": "teleop.rest_pose_left",
+          "label": "Left arm rest pose",
+          "options": null,
+          "type": "text",
+          "ui": {
+            "widget": "pose"
+          }
+        },
+        {
+          "default": [
+            0.15707963705062866,
+            0.0,
+            0.0,
+            -0.3141592741012573,
+            0.0,
+            0.0,
+            0.15707963705062866
+          ],
+          "defaultText": null,
+          "help": "Right arm rest/start configuration in radians, 7 joints in ARM_JOINTS order. Edited with the pose editor.",
+          "key": "teleop.rest_pose_right",
+          "label": "Right arm rest pose",
+          "options": null,
+          "type": "text",
+          "ui": {
+            "widget": "pose"
+          }
+        },
+        {
+          "default": null,
+          "defaultText": null,
+          "help": "LeRobot identifier used for this teleoperator instance.",
+          "key": "teleop.id",
+          "label": "Teleoperator ID",
+          "options": null,
+          "type": "text",
+          "ui": {}
+        },
+        {
+          "default": null,
+          "defaultText": null,
+          "help": "Directory containing LeRobot teleoperator calibration files.",
+          "key": "teleop.calibration_dir",
+          "label": "Teleoperator calibration directory",
+          "options": null,
+          "type": "text",
+          "ui": {}
+        }
+      ]
+    },
+    {
+      "description": "IK solver cost weights for teleop and data collection \u2014 how the arms trade off tracking the hands against posture and limits.",
+      "key": "kinematics",
+      "label": "Kinematics",
+      "settings": [
+        {
+          "default": 50.0,
+          "defaultText": null,
+          "help": "Weight on end-effector position error.",
+          "key": "kinematics.pos_weight",
+          "label": "Position weight",
+          "options": null,
+          "type": "number",
+          "ui": {}
+        },
+        {
+          "default": 10.0,
+          "defaultText": null,
+          "help": "Weight on end-effector orientation error.",
+          "key": "kinematics.ori_weight",
+          "label": "Orientation weight",
+          "options": null,
+          "type": "number",
+          "ui": {}
+        },
+        {
+          "default": 0.0,
+          "defaultText": null,
+          "help": "Weight on the elbow position hint \u2014 how strongly the arm follows the operator's elbow (position only). 0 disables elbow tracking; the arm's swivel then follows the posture attractor instead of the headset's inferred elbow.",
+          "key": "kinematics.elbow_weight",
+          "label": "Elbow weight",
+          "options": null,
+          "type": "number",
+          "ui": {}
+        },
+        {
+          "default": 7.5,
+          "defaultText": null,
+          "help": "Weight pulling joints toward the current configuration \u2014 higher damps drift, lower tracks more aggressively.",
+          "key": "kinematics.rest_weight",
+          "label": "Rest weight",
+          "options": null,
+          "type": "number",
+          "ui": {}
+        },
+        {
+          "default": 0.03455751918948772,
+          "defaultText": null,
+          "help": "Maximum change of any joint between consecutive IK solutions.",
+          "key": "kinematics.max_joint_delta",
+          "label": "Max joint delta (rad)",
+          "options": null,
+          "type": "number",
+          "ui": {}
+        }
+      ]
+    },
+    {
+      "description": "Dataset recording shared by collect-data and run-policy.",
+      "key": "recording",
+      "label": "Recording",
+      "settings": [
+        {
+          "default": null,
+          "defaultText": null,
+          "help": "Frame rate of the recorded dataset (and policy control rate). Recording cameras' capture fps is raised automatically to match when this is set above their default 60 \u2014 note the ZED X only supports rates above 60 at SVGA resolution.",
+          "key": "recording.fps",
+          "label": "Recording fps",
+          "options": null,
+          "type": "number",
+          "ui": {}
+        },
+        {
+          "default": null,
+          "defaultText": null,
+          "help": "Replay rate override; 0 uses the dataset's recorded frame rate.",
+          "key": "recording.replay_fps",
+          "label": "Replay fps",
+          "options": null,
+          "type": "number",
+          "ui": {}
+        },
+        {
+          "default": null,
+          "defaultText": null,
+          "help": "Include joint torques in the recorded observations. A policy must run with the same observation shape it was trained on.",
+          "key": "recording.observe_torques",
+          "label": "Observe torques",
+          "options": null,
+          "type": "boolean",
+          "ui": {}
+        },
+        {
+          "default": null,
+          "defaultText": null,
+          "help": "Use Cartesian space for observations and actions: each arm's end-effector as a 6-axis pose plus gripper, instead of the 7 joint angles. Must match between data collection and running the policy.",
+          "key": "recording.observe_cartesian",
+          "label": "Observe Cartesian",
+          "options": null,
+          "type": "boolean",
+          "ui": {}
+        },
+        {
+          "default": null,
+          "defaultText": null,
+          "help": "Codec for the recorded dataset video (auto, h264, libsvtav1, \u2026). Leave unset for the platform default.",
+          "key": "recording.vcodec",
+          "label": "Video codec",
+          "options": null,
+          "type": "text",
+          "ui": {}
+        },
+        {
+          "default": null,
+          "defaultText": "~/.cache/huggingface/lerobot",
+          "help": "Local directory datasets are written to / read from.",
+          "key": "recording.root",
+          "label": "Dataset root",
+          "options": null,
+          "type": "text",
+          "ui": {}
+        },
+        {
+          "default": null,
+          "defaultText": null,
+          "help": "Upload the dataset to the HuggingFace Hub when recording ends.",
+          "key": "recording.push_to_hub",
+          "label": "Push to HuggingFace Hub",
+          "options": null,
+          "type": "boolean",
+          "ui": {}
+        },
+        {
+          "default": null,
+          "defaultText": "off \u2014 not streaming to a Rerun viewer",
+          "help": "Stream live visualization to a Rerun viewer at this address.",
+          "key": "recording.rerun_ip",
+          "label": "Rerun viewer IP",
+          "options": null,
+          "type": "text",
+          "ui": {}
+        },
+        {
+          "default": null,
+          "defaultText": null,
+          "help": "Port of the Rerun viewer.",
+          "key": "recording.rerun_port",
+          "label": "Rerun viewer port",
+          "options": null,
+          "type": "number",
+          "ui": {}
+        }
+      ]
+    },
+    {
+      "description": "Where and how run-policy executes the policy.",
+      "key": "inference",
+      "label": "Inference",
+      "settings": [
+        {
+          "default": null,
+          "defaultText": null,
+          "help": "Device the policy runs on.",
+          "key": "inference.device",
+          "label": "Device",
+          "options": [
+            "cuda",
+            "cpu",
+            "mps"
+          ],
+          "type": "select",
+          "ui": {}
+        },
+        {
+          "default": null,
+          "defaultText": "local \u2014 inference runs on this machine",
+          "help": "Address of a remote `axol inference-server`. Leave unset to run inference locally.",
+          "key": "inference.server_host",
+          "label": "Inference server host",
+          "options": null,
+          "type": "text",
+          "ui": {}
+        },
+        {
+          "default": null,
+          "defaultText": null,
+          "help": "Port of the inference server (local or remote).",
+          "key": "inference.server_port",
+          "label": "Inference server port",
+          "options": null,
+          "type": "number",
+          "ui": {}
+        },
+        {
+          "default": null,
+          "defaultText": null,
+          "help": "Maximum length of one policy episode.",
+          "key": "inference.episode_time_s",
+          "label": "Episode length (s)",
+          "options": null,
+          "type": "number",
+          "ui": {}
+        },
+        {
+          "default": null,
+          "defaultText": null,
+          "help": "Actions requested from the policy per inference call.",
+          "key": "inference.actions_per_chunk",
+          "label": "Actions per chunk",
+          "options": null,
+          "type": "number",
+          "ui": {}
+        },
+        {
+          "default": null,
+          "defaultText": null,
+          "help": "Queue fraction below which the next chunk is requested.",
+          "key": "inference.chunk_size_threshold",
+          "label": "Chunk size threshold",
+          "options": null,
+          "type": "number",
+          "ui": {}
+        },
+        {
+          "default": null,
+          "defaultText": null,
+          "help": "How overlapping action chunks are combined.",
+          "key": "inference.aggregate_fn",
+          "label": "Chunk aggregation",
+          "options": [
+            "temporal_ensemble",
+            "weighted_average",
+            "latest_only",
+            "average",
+            "conservative"
+          ],
+          "type": "select",
+          "ui": {}
+        },
+        {
+          "default": null,
+          "defaultText": null,
+          "help": "Exponential weight for the temporal_ensemble aggregation.",
+          "key": "inference.temporal_ensemble_coeff",
+          "label": "Temporal ensemble coeff",
+          "options": null,
+          "type": "number",
+          "ui": {}
+        }
+      ]
+    },
+    {
+      "description": "Logging and diagnostics.",
+      "key": "system",
+      "label": "System",
+      "settings": [
+        {
+          "default": "INFO",
+          "defaultText": null,
+          "help": "Verbosity of the operation log shown in the console.",
+          "key": "system.log_level",
+          "label": "Log level",
+          "options": [
+            "DEBUG",
+            "INFO",
+            "WARNING",
+            "ERROR"
+          ],
+          "type": "select",
+          "ui": {}
+        }
+      ]
+    }
+  ],
+  "values": {}
+}

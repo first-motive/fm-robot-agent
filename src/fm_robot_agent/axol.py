@@ -36,6 +36,13 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from fm_robot_agent.cdr import joint_state
+from fm_robot_agent.config import (
+    MODE,
+    MODE_ALIAS,
+    MOTION,
+    TUNING,
+    Setting,
+)
 from fm_robot_agent.protocol import AdapterError, Outcome
 
 KIND = "axol"
@@ -55,6 +62,30 @@ MODES = {
 }
 
 RECORD_OPERATION = "collect-data"
+
+#: Curated settings that shape how the arms move, by exact key or by prefix.
+#: Everything Almond curates and this does not name is written through: an fps,
+#: a codec, a log level and an inference host change what the robot records or
+#: talks to, not how it moves.
+MOTION_KEYS = (
+    "robot.left_stiffness",
+    "robot.right_stiffness",
+    "robot.gripper_torque_limit",
+    "robot.gripper_max_speed",
+    "robot.reset_torque_threshold",
+    "teleop.position_multiplier",
+    "teleop.rotation_multiplier",
+)
+MOTION_PREFIXES = ("teleop.rest_pose_", "kinematics.")
+
+#: The Axol has no severing class. Nothing in Almond's settings moves the network
+#: this agent's commands arrive on: the agent reaches the robot over loopback
+#: HTTPS, and the fleet over TCP to the router.
+
+#: The whole advanced tree is treated as motion. Enumerating a vendor tree that
+#: moves on Almond's release schedule is work that expires, and the strictest
+#: guard is the honest default for keys nobody here has read.
+ADVANCED_CLASS = MOTION
 
 #: The owner half of a repo id becomes a directory component, exactly as the name
 #: half does, so it is held to the same shape. Configuration is trusted less than
@@ -169,6 +200,111 @@ class AxolAdapter:
             message=f"mode {config}",
             detail={"mode": config, "session": str(started.get("id", ""))},
         )
+
+    # --- config --------------------------------------------------------------
+
+    def config_read(self) -> list[Setting]:
+        """Almond's own curated settings, its advanced values, and the mode.
+
+        The schema is the vendor's: Almond ships one, so this forwards it rather
+        than restating ~50 keys that would drift on its next release. What this
+        repo adds is the class, which is the part Almond has no opinion about.
+        """
+        snapshot = self._get("/api/settings")
+        stored = snapshot.get("values") or {}
+        settings = [
+            Setting(
+                key=MODE_ALIAS,
+                value=self.status()["mode"],
+                klass=MODE,
+                options=tuple(sorted(MODES)),
+                help="The operation this robot is running.",
+            )
+        ]
+        for category in snapshot.get("schema") or []:
+            for field in category.get("settings") or []:
+                key = field.get("key") or ""
+                if not key:
+                    continue
+                settings.append(
+                    Setting(
+                        key=key,
+                        value=stored.get(key, field.get("default")),
+                        klass=_curated_class(key),
+                        options=tuple(field.get("options") or ()),
+                        help=field.get("help") or "",
+                    )
+                )
+        # Advanced keys are listed only where the robot holds a value for one.
+        # The tree itself is not enumerated: it is Almond's, it moves, and a
+        # caller reaches any leaf of it by exact key regardless.
+        for key, value in sorted((snapshot.get("advanced") or {}).items()):
+            settings.append(
+                Setting(
+                    key=key,
+                    value=value,
+                    klass=ADVANCED_CLASS,
+                    help="An advanced key, guarded as motion because nobody here has read it.",
+                )
+            )
+        return settings
+
+    def config_write(self, key: str, value: str) -> Outcome:
+        """Write one curated setting, one advanced key, or the mode."""
+        if key == MODE_ALIAS:
+            return self.set_mode(value)
+
+        snapshot = self._get("/api/settings")
+        field = _curated_field(snapshot, key)
+        if field is not None:
+            klass = _curated_class(key)
+            refusal = self._motion_guard(key, klass)
+            if refusal is not None:
+                return refusal
+            try:
+                typed = _typed(field, value)
+            except ValueError as exc:
+                return Outcome(ok=False, message=str(exc))
+            self._put("/api/settings", {"values": {key: typed}})
+            return Outcome(
+                ok=True,
+                message=f"{key}={typed}",
+                detail={"key": key, "value": typed, "class": klass},
+            )
+
+        if key.partition(".")[0] in _advanced_sections(snapshot):
+            refusal = self._motion_guard(key, ADVANCED_CLASS)
+            if refusal is not None:
+                return refusal
+            typed = _scalar(value)
+            self._put("/api/settings", {"advanced": {key: typed}})
+            return Outcome(
+                ok=True,
+                message=f"{key}={typed}",
+                detail={"key": key, "value": typed, "class": ADVANCED_CLASS},
+            )
+
+        return Outcome(ok=False, message=f"{key} is not a setting this robot has")
+
+    def config_rollback(self) -> Outcome:
+        """The Axol has no severing class, so no change is ever left open.
+
+        Nothing in Almond's settings moves the network this reply travels on. A
+        change that goes wrong here shows up in the robot's own behaviour, where
+        an operator sees it, rather than in silence.
+        """
+        return Outcome(ok=False, message="the Axol journals nothing; no change is open")
+
+    def _motion_guard(self, key: str, klass: str) -> Outcome | None:
+        """Refuse a motion key while an operation runs, from the robot's own status."""
+        if klass != MOTION:
+            return None
+        if self._get("/api/op/status").get("running"):
+            return Outcome(
+                ok=False,
+                message=f"{key} shapes motion and an operation is running; stop it first",
+            )
+        return None
 
     def record(self, dataset: str, action: str) -> Outcome:
         if action == "start":
@@ -289,12 +425,15 @@ class AxolAdapter:
     def _post(self, path: str, payload: dict) -> dict:
         return self._request(path, json.dumps(payload).encode())
 
-    def _request(self, path: str, body: bytes | None) -> dict:
+    def _put(self, path: str, payload: dict) -> dict:
+        return self._request(path, json.dumps(payload).encode(), method="PUT")
+
+    def _request(self, path: str, body: bytes | None, method: str = "") -> dict:
         request = urllib.request.Request(
             f"{self.base_url}{path}",
             data=body,
             headers={"Content-Type": "application/json"},
-            method="POST" if body is not None else "GET",
+            method=method or ("POST" if body is not None else "GET"),
         )
         try:
             with urllib.request.urlopen(
@@ -361,3 +500,72 @@ def _episode_size_kb(root: Path, episode_index: int) -> int:
             except OSError:
                 continue
     return total // 1024
+
+
+def _curated_class(key: str) -> str:
+    """The class one of Almond's curated settings gets."""
+    if key in MOTION_KEYS or key.startswith(MOTION_PREFIXES):
+        return MOTION
+    return TUNING
+
+
+def _curated_field(snapshot: dict, key: str) -> dict | None:
+    """The vendor's own definition of a curated key, or ``None`` when it has none."""
+    for category in snapshot.get("schema") or []:
+        for field in category.get("settings") or []:
+            if field.get("key") == key:
+                return field
+    return None
+
+
+def _advanced_sections(snapshot: dict) -> tuple[str, ...]:
+    """The top-level sections of the advanced tree, which is how Almond scopes it.
+
+    Almond's own store rejects an advanced key whose first segment names no
+    section, so matching that check here refuses the same keys without this
+    repo holding a copy of a tree that moves.
+    """
+    return tuple(
+        section.get("key", "") for section in snapshot.get("advancedSchema") or [] if section.get("key")
+    )
+
+
+def _typed(field: dict, value: str) -> object:
+    """One curated value in the type the vendor says it has.
+
+    The wire carries text, and Almond stores what it is given: a "0.8" written
+    where a number belongs is a string that fails the moment an op reads it.
+    """
+    kind = field.get("type") or "text"
+    options = field.get("options") or []
+    if options and value not in options:
+        raise ValueError(f"{field.get('key')} is one of {list(options)}")
+    if kind == "number":
+        try:
+            number = float(value)
+        except ValueError:
+            raise ValueError(f"{field.get('key')} is a number") from None
+        return int(number) if number.is_integer() and "." not in value else number
+    if kind == "boolean":
+        lowered = value.lower()
+        if lowered not in ("true", "false"):
+            raise ValueError(f"{field.get('key')} is true or false")
+        return lowered == "true"
+    return value
+
+
+def _scalar(value: str) -> object:
+    """An advanced value as its own type, since the tree carries no schema here.
+
+    A number stays a number and a boolean stays a boolean; anything else is the
+    text it arrived as. UNKNOWN is not used for these: the class is motion, and
+    what is missing is the type, not the classification.
+    """
+    lowered = value.lower()
+    if lowered in ("true", "false"):
+        return lowered == "true"
+    try:
+        number = float(value)
+    except ValueError:
+        return value
+    return int(number) if number.is_integer() and "." not in value else number
