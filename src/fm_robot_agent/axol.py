@@ -1,8 +1,11 @@
 """The Almond Axol, driven through its own web stack.
 
 The Axol has no ROS graph. One process — Almond's FastAPI server on
-``localhost:8001`` — owns the CAN bus, the cameras, and every operation the robot
-runs, and it is installed from Almond's own release. This adapter is a client of
+``https://localhost:8001`` — owns the CAN bus, the cameras, and every operation
+the robot runs, and it is installed from Almond's own release. It serves TLS with
+a certificate it signed itself, which is checked for every host except loopback:
+the agent runs on the same machine, so that connection never leaves it, and no
+authority issues a certificate for ``localhost``. This adapter is a client of
 that server and nothing more: it imports no Almond SDK, touches no CAN interface,
 and starts no process the server does not already manage. A stock Axol install
 keeps working with the agent installed beside it.
@@ -21,20 +24,27 @@ caller supplies only the name half, and the two are joined here.
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import os
 import re
+import ssl
 import time
 import urllib.error
 import urllib.request
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from fm_robot_agent.cdr import joint_state
 from fm_robot_agent.protocol import AdapterError, Outcome
 
 KIND = "axol"
 
-DEFAULT_BASE_URL = "http://localhost:8001"
+# HTTPS, on the robot's own loopback. Almond's server presents a self-signed
+# certificate — its web UI has an "accept this certificate" page for exactly that
+# reason — and nothing issues it a real one, because it is never meant to be
+# reached from off the host.
+DEFAULT_BASE_URL = "https://localhost:8001"
 DEFAULT_DATASET_OWNER = "axol"
 
 #: What the fleet calls a mode, and the operation id the Axol server runs for it.
@@ -58,6 +68,45 @@ OWNER_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 TELEMETRY_MAX_HZ = 20.0
 
 REQUEST_TIMEOUT_S = 10.0
+
+#: Hosts whose certificate is not checked. The agent and the Axol server run on
+#: the same machine, so the connection never leaves it: there is no network for a
+#: man in the middle to sit in, and no authority that would issue a certificate
+#: for `localhost` anyway. Anything else is verified normally — a base URL
+#: pointing off-host is a different situation and gets the usual rules.
+LOOPBACK_HOSTS = ("localhost",)
+
+
+def _loopback(url: str) -> bool:
+    """Whether a URL points at this machine.
+
+    An address is asked whether it is loopback rather than compared to a list of
+    spellings: `::1`, `0:0:0:0:0:0:0:1` and `127.0.0.2` are all loopback and only
+    the first would survive a string match, which would then demand a certificate
+    no one can issue and fail the connection.
+    """
+    host = urlsplit(url).hostname or ""
+    if host in LOOPBACK_HOSTS:
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def _ssl_context(url: str) -> ssl.SSLContext | None:
+    """The TLS context for a URL, or ``None`` when it is not HTTPS at all.
+
+    Verification is dropped only for loopback, and only because the certificate
+    there is self-signed by design. See :data:`LOOPBACK_HOSTS`.
+    """
+    if not url.startswith(("https://", "wss://")):
+        return None
+    context = ssl.create_default_context()
+    if _loopback(url):
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
+    return context
 
 
 class AxolAdapter:
@@ -184,10 +233,13 @@ class AxolAdapter:
         except ImportError as exc:  # pragma: no cover - a packaging fault, not a path
             raise AdapterError(f"websockets is not installed: {exc}") from exc
 
-        url = self.base_url.replace("http://", "ws://").replace("https://", "wss://")
+        url = self.base_url.replace("https://", "wss://").replace("http://", "ws://")
         minimum_gap_s = 1.0 / TELEMETRY_MAX_HZ
         last_sent = 0.0
-        with connect(f"{url}/api/telemetry/ws", open_timeout=REQUEST_TIMEOUT_S) as socket:
+        socket_url = f"{url}/api/telemetry/ws"
+        with connect(
+            socket_url, open_timeout=REQUEST_TIMEOUT_S, ssl=_ssl_context(socket_url)
+        ) as socket:
             for message in socket:
                 try:
                     frame = json.loads(message)
@@ -239,7 +291,9 @@ class AxolAdapter:
             method="POST" if body is not None else "GET",
         )
         try:
-            with urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT_S) as response:
+            with urllib.request.urlopen(
+                request, timeout=REQUEST_TIMEOUT_S, context=_ssl_context(self.base_url)
+            ) as response:
                 decoded = json.loads(response.read() or b"{}")
         except urllib.error.HTTPError as exc:
             raise AdapterError(f"{path} refused: {exc.code} {exc.reason}") from exc

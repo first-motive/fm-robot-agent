@@ -79,7 +79,7 @@ def server(monkeypatch):
     """Patch at the socket boundary, so the adapter's own error handling runs."""
     stub = ServerStub()
 
-    def fake_urlopen(request, timeout=None):
+    def fake_urlopen(request, timeout=None, context=None):
         body = request.data
         payload = json.loads(body) if body else None
         return FakeResponse(stub.handle(request.get_method(), request.selector, payload))
@@ -292,8 +292,9 @@ def patch_socket(monkeypatch, messages):
     stub = SocketStub(messages)
     opened = {}
 
-    def connect(url, open_timeout=None):
+    def connect(url, open_timeout=None, ssl=None):
         opened["url"] = url
+        opened["ssl"] = ssl
         return stub
 
     module = types.ModuleType("websockets.sync.client")
@@ -308,10 +309,17 @@ def patch_socket(monkeypatch, messages):
     return opened
 
 
-def test_telemetry_opens_the_axol_socket_as_a_websocket(monkeypatch):
+def test_telemetry_opens_the_axol_socket_as_a_secure_websocket(monkeypatch):
+    opened = patch_socket(monkeypatch, [])
+    list(AxolAdapter().telemetry())
+    assert opened["url"] == "wss://localhost:8001/api/telemetry/ws"
+
+
+def test_a_plain_http_base_url_still_opens_an_unencrypted_socket(monkeypatch):
     opened = patch_socket(monkeypatch, [])
     list(AxolAdapter(base_url="http://localhost:8001").telemetry())
     assert opened["url"] == "ws://localhost:8001/api/telemetry/ws"
+    assert opened["ssl"] is None
 
 
 def test_telemetry_forwards_only_motor_frames(monkeypatch):
@@ -351,3 +359,62 @@ def test_telemetry_forwards_again_once_the_gap_has_passed(monkeypatch):
     clock = iter([100.0, 200.0, 300.0, 400.0])
     monkeypatch.setattr(axol_module.time, "time", lambda: next(clock))
     assert len(list(AxolAdapter().telemetry())) == 3
+
+
+# --- TLS ---------------------------------------------------------------------
+
+
+def test_the_axol_is_reached_over_https_by_default():
+    """Almond's server presents a self-signed certificate on its own loopback."""
+    assert AxolAdapter().base_url == "https://localhost:8001"
+
+
+def test_loopback_certificates_are_not_verified():
+    """Self-signed by design, on a connection that never leaves the host."""
+    import ssl as ssl_module
+
+    from fm_robot_agent.axol import _ssl_context
+
+    context = _ssl_context("https://localhost:8001")
+    assert context.check_hostname is False
+    assert context.verify_mode == ssl_module.CERT_NONE
+
+
+@pytest.mark.parametrize("url", ["https://axol.almond.bot", "wss://axol.almond.bot/x"])
+def test_an_off_host_certificate_is_verified_normally(url):
+    """Dropping verification is a loopback concession, not a habit."""
+    import ssl as ssl_module
+
+    context = _ssl_context_for(url)
+    assert context.check_hostname is True
+    assert context.verify_mode == ssl_module.CERT_REQUIRED
+
+
+def _ssl_context_for(url):
+    from fm_robot_agent.axol import _ssl_context
+
+    return _ssl_context(url)
+
+
+def test_plain_http_gets_no_tls_context():
+    from fm_robot_agent.axol import _ssl_context
+
+    assert _ssl_context("http://localhost:8001") is None
+
+
+@pytest.mark.parametrize(
+    "host",
+    ["localhost", "127.0.0.1", "127.0.0.2", "[::1]", "[0:0:0:0:0:0:0:1]"],
+)
+def test_every_spelling_of_this_machine_is_loopback(host):
+    """A spelling match would demand a certificate nobody can issue for it."""
+    from fm_robot_agent.axol import _loopback
+
+    assert _loopback(f"https://{host}:8001") is True
+
+
+@pytest.mark.parametrize("host", ["axol.almond.bot", "192.168.1.30", "[2001:db8::1]"])
+def test_an_off_host_address_is_not_loopback(host):
+    from fm_robot_agent.axol import _loopback
+
+    assert _loopback(f"https://{host}:8001") is False
