@@ -18,6 +18,7 @@ import json
 import signal
 import sys
 import threading
+import time
 
 from fm_robot_agent.anvil import KIND as ANVIL_KIND
 from fm_robot_agent.anvil import AnvilAdapter
@@ -28,6 +29,11 @@ from fm_robot_agent.env import EndpointError, router_endpoint
 from fm_robot_agent.fake import FakeAdapter
 from fm_robot_agent.protocol import AdapterError, RobotAdapter
 from fm_robot_agent.verbs import KEY_PREFIX, answer
+
+#: The topic the fleet watches a robot through, and therefore the one a severing
+#: config change is verified against. The Anvil's crosses through
+#: ``zenoh-bridge-ros2dds``; the Axol's is published by this process.
+TELEMETRY_TOPIC = "joint_states"
 
 #: Which adapter drives which card kind. The adapters land one per robot; the
 #: fake is what ``--fake`` serves and what the suite drives.
@@ -80,6 +86,34 @@ def _handler(adapter: RobotAdapter, namespace: str):
             query.reply_err(reply.payload, encoding=encoding)
 
     return handle
+
+
+class FabricWatch:
+    """When this robot's telemetry was last seen on the fabric.
+
+    The severing guard has to answer one question: did telemetry come back after
+    the restart? Asking the robot's own container is the wrong side of the hop —
+    a container's DDS graph is healthy whatever interface the bridge was pointed
+    at, which is how a workcell pinned to `docker0` once reported success while
+    the fleet received nothing.
+
+    This watches the key the fleet actually subscribes to, from the session the
+    agent already holds. It keeps a timestamp and nothing else: no payload is
+    decoded, because what is being verified is that bytes arrive at all.
+
+    Zenoh calls :meth:`sample` from its own thread. A float assignment is atomic
+    under the GIL, so no lock is needed for one stamp.
+    """
+
+    def __init__(self) -> None:
+        self.last_seen = 0.0
+
+    def sample(self, _sample: object) -> None:
+        self.last_seen = time.monotonic()
+
+    def seen_since(self, since: float) -> bool:
+        """Whether a sample arrived after ``since``, as the guard asks it."""
+        return self.last_seen > since
 
 
 #: How long to wait before reopening a telemetry stream that dropped. The Axol's
@@ -161,6 +195,15 @@ def main(argv: list[str] | None = None) -> int:
 
     with zenoh.open(_session_config(endpoint)) as session:
         session.declare_queryable(key, _handler(adapter, namespace))
+
+        # The severing guard verifies against the fabric, so it needs a view of
+        # the fabric. The adapter holds no Zenoh — this hands it a question it
+        # can ask, and the subscription lives here with the session.
+        if hasattr(adapter, "fabric_probe"):
+            watch = FabricWatch()
+            session.declare_subscriber(f"{namespace}/{TELEMETRY_TOPIC}", watch.sample)
+            adapter.fabric_probe = watch.seen_since
+            print(f"fm-robot-agent: verifying against {namespace}/{TELEMETRY_TOPIC}", flush=True)
         print(f"fm-robot-agent: serving {key} as {card.kind} via {endpoint}", flush=True)
 
         stop = threading.Event()
