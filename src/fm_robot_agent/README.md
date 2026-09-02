@@ -47,6 +47,13 @@ probe; the adapter still imports no Zenoh, and the suite still runs with no
 router. A bench run with no session falls back to the container, where there is
 no fabric to be wrong about.
 
+The restart is waited on rather than detached, which is the other half of the
+same lesson: a detached recreate returns while the old containers are still
+publishing the old, working configuration, so the window opens against telemetry
+the change has not reached yet and every value verifies. A nonexistent interface
+passed in five seconds that way, and the journal closed before the containers it
+broke had restarted.
+
 A severing change is journalled to disk before anything is written and the
 journal is closed only once telemetry has been seen. An agent that starts and
 finds one open is an agent whose predecessor died inside the verification window,

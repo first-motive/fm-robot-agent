@@ -131,6 +131,11 @@ TELEMETRY_TOPIC = "/joint_states"
 VERIFY_WINDOW_S = 90.0
 VERIFY_INTERVAL_S = 5.0
 
+#: How long a recreate is given before the verification stops waiting for it.
+#: Measured on the workcell, where five containers come back in about thirty
+#: seconds; the ceiling is for the run that pulls an image.
+RECREATE_TIMEOUT_S = 180
+
 #: How long one probe waits for a message. Shorter than the interval so a probe
 #: that finds nothing still leaves time for the next one.
 PROBE_TIMEOUT_S = 4
@@ -454,14 +459,22 @@ class AnvilAdapter:
         return restored
 
     def _restart_data_plane(self) -> None:
-        """Recreate the stack and restart the bridge, so both read the new values.
+        """Recreate the stack and restart the bridge, and wait for both.
 
         Both, because the pair is the point: the containers take the domain and
         the interface from `.env.config`, and the bridge takes the same two from
         the fleet file. Restarting one of them is how they were last found
         disagreeing.
+
+        Waited on, not detached — and this is the whole verification. A detached
+        recreate returns the moment compose is spawned, while the old containers
+        keep publishing the old, working configuration for another half minute.
+        The window then opens against telemetry the change has not touched yet,
+        and every value verifies. On the workcell a nonexistent interface passed
+        in five seconds that way, and the journal closed before the containers it
+        broke had even restarted.
         """
-        self._compose_detached("recreate")
+        self._compose_blocking("recreate")
         try:
             subprocess.run(
                 ["systemctl", "restart", BRIDGE_UNIT],
@@ -738,6 +751,29 @@ class AnvilAdapter:
 
     def _stack_running(self) -> bool:
         return any(row["state"] == "running" for row in self.compose_ps())
+
+    def _compose_blocking(self, action: str) -> None:
+        """Run a compose verb and wait for it, so a caller can trust it happened.
+
+        Only the severing path uses this. `up`, `down` and a mode change detach
+        on purpose: they answer to a caller who polls `status`, and a compose run
+        that outlives its request must never be able to strand a workcell. A
+        severing write is the one case where the answer depends on the restart
+        having finished.
+        """
+        try:
+            subprocess.run(
+                ["docker", "compose", *COMPOSE_ACTIONS[action]],
+                cwd=self.loader_dir,
+                capture_output=True,
+                text=True,
+                timeout=RECREATE_TIMEOUT_S,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            # Reported by the verification that follows: a recreate that hung is
+            # a data plane that has not come back, which is the same answer.
+            print(f"fm-robot-agent: compose {action}: {exc}", file=sys.stderr, flush=True)
 
     def _compose_detached(self, action: str) -> Outcome:
         """Run a compose verb in its own session, output to the log.

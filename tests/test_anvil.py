@@ -86,6 +86,7 @@ def adapter(loader, monkeypatch):
     robot.webapp = WebappStub()
 
     def fake_run(argv, **kwargs):
+        robot.ran.append(argv)
         joined = " ".join(argv)
         if "ps" in argv:
             return subprocess.CompletedProcess(argv, 0, COMPOSE_PS, "")
@@ -97,6 +98,7 @@ def adapter(loader, monkeypatch):
             return subprocess.CompletedProcess(argv, 0, "response:\nAccepted(ok=True)\n", "")
         return subprocess.CompletedProcess(argv, 0, "", "")
 
+    robot.ran = []
     monkeypatch.setattr(subprocess, "run", fake_run)
     robot.launched = []
     monkeypatch.setattr(
@@ -402,9 +404,11 @@ def test_a_motion_key_is_written_once_the_stack_is_down(adapter, loader, monkeyp
     assert "TELEOP_POSITION_SCALE=1.5" in (loader / ".env.config").read_text()
 
 
-def test_a_severing_key_recreates_the_stack(adapter):
+def test_a_severing_key_recreates_the_stack_and_waits_for_it(adapter):
+    """Detached, the window would open against the old containers' telemetry."""
     assert adapter.config_write("CYCLONEDDS_IFACE", "eth0").ok is True
-    assert adapter.launched and "--force-recreate" in adapter.launched[0]
+    assert any("--force-recreate" in argv for argv in adapter.ran)
+    assert adapter.launched == [], "a severing recreate must not be detached"
 
 
 # --- the paired write --------------------------------------------------------
@@ -488,9 +492,12 @@ def test_a_severing_write_that_kills_telemetry_reverts_both_files(dead_telemetry
 
 
 def test_a_revert_restarts_the_stack_and_the_bridge(dead_telemetry):
-    dead_telemetry.config_write("ROS_DOMAIN_ID", "7")
     # Once to apply the change, once to put the old one back.
-    assert len(dead_telemetry.launched) == 2
+    dead_telemetry.config_write("ROS_DOMAIN_ID", "7")
+    recreates = [argv for argv in dead_telemetry.ran if "--force-recreate" in argv]
+    restarts = [argv for argv in dead_telemetry.ran if argv[:2] == ["systemctl", "restart"]]
+    assert len(recreates) == 2
+    assert len(restarts) == 2
 
 
 def test_a_second_severing_write_while_one_is_open_is_refused(adapter, monkeypatch):
@@ -644,3 +651,15 @@ def test_a_bench_run_with_no_session_falls_back_to_the_container(adapter, monkey
     monkeypatch.setattr(adapter, "_ros_command", lambda *a, **kw: asked.append(a) or "")
     assert adapter._telemetry_arrives(0.0) is True
     assert asked
+
+
+def test_the_window_opens_only_after_the_restart_has_finished(adapter, monkeypatch):
+    """Verified against the old containers, every value passes — including a wrong one."""
+    order = []
+    monkeypatch.setattr(adapter, "_compose_blocking", lambda action: order.append("recreate"))
+    adapter.fabric_probe = lambda since: order.append("probe") or True
+
+    adapter.config_write("CYCLONEDDS_IFACE", "eth0")
+
+    assert order[0] == "recreate", "telemetry was sampled before the stack came back"
+    assert "probe" in order
