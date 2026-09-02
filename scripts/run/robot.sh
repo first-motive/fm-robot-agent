@@ -6,6 +6,8 @@
 #   fm robot fm-rob-01 status --json
 #   fm robot fm-rob-01 up
 #   fm robot fm-rob-01 mode openarm_v2_quest_teleop.yaml
+#   fm robot fm-rob-01 config get
+#   fm robot fm-rob-01 config set CYCLONEDDS_VERBOSITY=fine
 #   fm robot fm-rob-01 record start --dataset grocery-sort-v1
 #   fm robot fm-rob-01 stop
 #
