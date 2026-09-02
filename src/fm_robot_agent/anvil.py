@@ -29,6 +29,7 @@ import shutil
 import subprocess
 import sys
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 from fm_robot_agent.config import (
@@ -180,6 +181,7 @@ class AnvilAdapter:
         webapp_url: str | None = None,
         comms_env: Path | None = None,
         journal: Journal | None = None,
+        fabric_probe: Callable[[float], bool] | None = None,
     ) -> None:
         self.loader_dir = loader_dir or Path(
             os.environ.get("FM_ANVIL_LOADER_DIR", str(Path.home() / "anvil-loader"))
@@ -189,6 +191,10 @@ class AnvilAdapter:
         self.recordings_dir = self.loader_dir / "data" / "recordings"
         self.comms_env = comms_env or FM_COMMS_ENV
         self.journal = journal or Journal(STATE_DIR / "config-journal.json")
+        #: Whether this robot's telemetry has reached the fabric since a moment.
+        #: Set by the service, which is where the Zenoh session lives. See
+        #: :meth:`_telemetry_arrives` for why the fabric is the side that counts.
+        self.fabric_probe = fabric_probe
         # The webapp is on this host. Recording is a localhost call, never a
         # fleet one: the fabric reaches the agent, and the agent reaches the
         # webapp, which is what keeps port 3000 off the tailnet.
@@ -470,23 +476,39 @@ class AnvilAdapter:
             pass
 
     def _data_plane_returns(self) -> bool:
-        """Wait for telemetry, up to the window a recreate and discovery need."""
-        deadline = time.monotonic() + VERIFY_WINDOW_S
+        """Wait for telemetry published *after* the restart, not before it.
+
+        The moment the restart began is what makes this a verification rather
+        than a reading: a sample from before the change proves the old
+        configuration worked, which was never in doubt.
+        """
+        since = time.monotonic()
+        deadline = since + VERIFY_WINDOW_S
         while time.monotonic() < deadline:
-            if self._telemetry_arrives():
+            if self._telemetry_arrives(since):
                 return True
             time.sleep(VERIFY_INTERVAL_S)
-        return self._telemetry_arrives()
+        return self._telemetry_arrives(since)
 
-    def _telemetry_arrives(self) -> bool:
-        """Whether one message lands on the topic the fleet watches.
+    def _telemetry_arrives(self, since: float) -> bool:
+        """Whether this robot's telemetry reached the fabric after ``since``.
 
-        Probed inside the ros2 container rather than from the fabric: the agent
-        holds a zenoh session for the verb set, and every adapter here imports no
-        zenoh precisely so the suite runs without a router. So this proves the
-        graph the bridge subscribes to is alive, not the hop past it — the bridge
-        is restarted alongside and its own unit failing is the other half.
+        The fabric, not the container. This asked the ros2 container whether
+        ``/joint_states`` was publishing, and that question cannot fail for the
+        defect this class exists to catch: a container's DDS graph is healthy on
+        any interface, and what a wrong ``CYCLONEDDS_IFACE`` breaks is the hop
+        the bridge makes onto the fleet. Pointed at ``docker0`` on the workcell,
+        it reported telemetry returning while the fleet received nothing — the
+        silent defect of the 2026-09-01 run, reproduced by the guard written to
+        prevent it.
+
+        So the service passes in a probe backed by its own subscription to this
+        robot's key, and the answer means what it says: bytes crossed the fabric
+        after the restart. The container probe stays as the fallback for a bench
+        run with no session, where there is no fabric to be wrong about.
         """
+        if self.fabric_probe is not None:
+            return self.fabric_probe(since)
         try:
             self._ros_command(
                 f"ros2 topic echo --once --timeout {PROBE_TIMEOUT_S} {TELEMETRY_TOPIC}",

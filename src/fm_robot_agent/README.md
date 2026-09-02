@@ -37,6 +37,16 @@ config set   ──▶ severing  write · restart stack + bridge · watch teleme
 config rollback ─▶ undo the open severing change
 ```
 
+A severing change is verified against the **fabric**, not against the robot's own
+container. A container's DDS graph is healthy whatever interface the bridge was
+pointed at, so asking it cannot fail for the defect this class exists to catch —
+pointed at `docker0` on the workcell, that question reported telemetry returning
+while the fleet received nothing. The service subscribes to this robot's
+`joint_states` key from the session it already holds and hands the adapter a
+probe; the adapter still imports no Zenoh, and the suite still runs with no
+router. A bench run with no session falls back to the container, where there is
+no fabric to be wrong about.
+
 A severing change is journalled to disk before anything is written and the
 journal is closed only once telemetry has been seen. An agent that starts and
 finds one open is an agent whose predecessor died inside the verification window,
@@ -65,7 +75,7 @@ robot.
 | `axol.py` | the Almond Axol: its HTTPS server, and its telemetry as JointState |
 | `cdr.py` | CDR encoding, so an Axol reaches the fabric looking like a ROS rig |
 | `fake.py` | a robot that exists only in memory, for the suite and `--fake` |
-| `service.py` | the Zenoh session and the queryable, and nothing else |
+| `service.py` | the Zenoh session, the queryable, and the fabric watch a severing write is verified against |
 | `client.py` | `fm robot`: a device name and a verb become one query |
 
 ## Use

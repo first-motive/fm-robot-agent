@@ -461,7 +461,7 @@ def test_a_host_with_no_fleet_file_still_writes_its_own(adapter, loader):
 @pytest.fixture
 def dead_telemetry(adapter, monkeypatch):
     """A robot whose data plane never comes back, verified instantly."""
-    monkeypatch.setattr(adapter, "_telemetry_arrives", lambda: False)
+    monkeypatch.setattr(adapter, "_telemetry_arrives", lambda since: False)
     monkeypatch.setattr(anvil, "VERIFY_WINDOW_S", 0.0)
     monkeypatch.setattr(anvil, "VERIFY_INTERVAL_S", 0.0)
     return adapter
@@ -587,7 +587,7 @@ def test_a_revert_puts_the_fleet_file_back_through_the_helper(
     adapter, loader, root_owned_fleet_file, monkeypatch
 ):
     """A revert that skipped that file would leave the value that killed telemetry."""
-    monkeypatch.setattr(adapter, "_telemetry_arrives", lambda: False)
+    monkeypatch.setattr(adapter, "_telemetry_arrives", lambda since: False)
     monkeypatch.setattr(anvil, "VERIFY_WINDOW_S", 0.0)
     monkeypatch.setattr(anvil, "VERIFY_INTERVAL_S", 0.0)
 
@@ -598,3 +598,49 @@ def test_a_revert_puts_the_fleet_file_back_through_the_helper(
     assert [call[-1] for call in root_owned_fleet_file] == ["7", "0"]
     # The loader's file goes back to what it held, which the fixture set to 1.
     assert "ROS_DOMAIN_ID=1" in (loader / ".env.config").read_text()
+
+
+# --- verifying against the fabric, not the container -------------------------
+
+
+def test_the_fabric_probe_is_what_decides_when_the_service_supplies_one(adapter, monkeypatch):
+    """A container probe cannot fail for a wrong interface; the fabric one can."""
+    asked = []
+    adapter.fabric_probe = lambda since: asked.append(since) or False
+    monkeypatch.setattr(anvil, "VERIFY_WINDOW_S", 0.0)
+    monkeypatch.setattr(anvil, "VERIFY_INTERVAL_S", 0.0)
+    monkeypatch.setattr(adapter, "_revert", lambda previous, key="": [])
+
+    outcome = adapter.config_write("CYCLONEDDS_IFACE", "docker0")
+
+    assert outcome.ok is False
+    assert outcome.detail["verified"] is False
+    assert asked, "the fabric probe was never asked"
+
+
+def test_a_sample_from_before_the_restart_does_not_count(adapter, monkeypatch):
+    """Telemetry that arrived before the change proves only that the old one worked."""
+    stale = [0.0]
+    adapter.fabric_probe = lambda since: stale[0] > since
+    monkeypatch.setattr(anvil, "VERIFY_WINDOW_S", 0.0)
+    monkeypatch.setattr(anvil, "VERIFY_INTERVAL_S", 0.0)
+    monkeypatch.setattr(adapter, "_revert", lambda previous, key="": [])
+
+    assert adapter.config_write("CYCLONEDDS_IFACE", "eth0").ok is False
+
+
+def test_telemetry_after_the_restart_keeps_the_change(adapter, loader):
+    adapter.fabric_probe = lambda since: True
+    outcome = adapter.config_write("CYCLONEDDS_IFACE", "eth0")
+    assert outcome.ok is True
+    assert outcome.detail["verified"] is True
+    assert "CYCLONEDDS_IFACE=eth0" in (loader / ".env.config").read_text()
+
+
+def test_a_bench_run_with_no_session_falls_back_to_the_container(adapter, monkeypatch):
+    """No fabric to be wrong about, so the container's own graph is the best answer."""
+    assert adapter.fabric_probe is None
+    asked = []
+    monkeypatch.setattr(adapter, "_ros_command", lambda *a, **kw: asked.append(a) or "")
+    assert adapter._telemetry_arrives(0.0) is True
+    assert asked
