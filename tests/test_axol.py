@@ -574,3 +574,25 @@ def test_the_mode_alias_starts_the_operation_it_names(adapter, settings_server):
 
 def test_rollback_says_the_axol_journals_nothing(adapter, settings_server):
     assert adapter.config_rollback().ok is False
+
+
+# --- what the server will actually accept ------------------------------------
+
+
+def test_starting_an_operation_sends_no_camera_spec(adapter, server):
+    """Almond types `cameras` as a dict; a list is refused 422 and nothing runs.
+
+    Omitting it means "use the camera spec this robot already has", which is the
+    right answer for the fleet: choosing cameras is a bench decision made in the
+    Axol's own UI.
+    """
+    adapter.set_mode("teleop")
+    payload = next(p for m, path, p in server.requests if path == "/api/op/start")
+    assert "cameras" not in payload
+
+
+def test_recording_sends_no_camera_spec(adapter, server):
+    adapter.record("pick-place", "start")
+    payload = next(p for m, path, p in server.requests if path == "/api/op/start")
+    assert "cameras" not in payload
+    assert payload["args"]["repo_id"] == "axol/pick-place"

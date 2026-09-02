@@ -190,12 +190,20 @@ class AxolAdapter:
         return Outcome(ok=True, message="link disconnected", detail={"state": answered.get("state", "")})
 
     def set_mode(self, config: str) -> Outcome:
-        """Stop whatever operation runs and start the one this mode names."""
+        """Stop whatever operation runs and start the one this mode names.
+
+        No ``cameras`` key. Almond's start request types it ``dict | None``, and
+        omitting it means "use the camera spec this robot already has" — which is
+        the right answer for the fleet, because choosing cameras is a bench
+        decision made in the Axol's own UI. An empty list was rejected outright
+        (422 dict_type), so every mode switch and every recording start over the
+        fabric failed until this was found on hardware.
+        """
         operation = MODES.get(config)
         if operation is None:
             return Outcome(ok=False, message=f"unknown mode {config!r}; expected one of {sorted(MODES)}")
         self._stop_operation()
-        started = self._post("/api/op/start", {"op": operation, "args": {}, "cameras": []})
+        started = self._post("/api/op/start", {"op": operation, "args": {}})
         return Outcome(
             ok=True,
             message=f"mode {config}",
@@ -316,7 +324,7 @@ class AxolAdapter:
         if action == "start":
             started = self._post(
                 "/api/op/start",
-                {"op": RECORD_OPERATION, "args": {"repo_id": self._repo_id(dataset)}, "cameras": []},
+                {"op": RECORD_OPERATION, "args": {"repo_id": self._repo_id(dataset)}},
             )
             return Outcome(
                 ok=True,
