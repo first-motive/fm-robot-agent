@@ -27,6 +27,7 @@ import re
 import shlex
 import shutil
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -51,6 +52,13 @@ KIND = "anvil-openarm-v2"
 
 MODE_KEY = "ARMS_CONTROL_CONFIG_FILE"
 COMPOSE_LOG = Path("/tmp/fm-robot-agent-compose.log")
+
+#: The writer that sets a key in the fleet file, and the account's one way past
+#: its root ownership. fm-setup's `robot-sudo` verb installs it and grants this
+#: exact path, so the agent can keep the two files in step without holding write
+#: access to a file two systemd units read. Absent on a bench host, where the
+#: fleet file is usually writable anyway.
+FLEET_WRITER = Path(os.environ.get("FM_COMMS_WRITER", "/usr/local/sbin/fm-comms-set"))
 
 #: The fleet's own transport file. The Anvil's `.env.config` sets the domain and
 #: the interface its containers use; this file sets the ones the zenoh bridge
@@ -359,7 +367,7 @@ class AnvilAdapter:
                 message=f"{key}={value}; telemetry returned",
                 detail={"key": key, "value": value, "class": SEVERING, "verified": True},
             )
-        reverted = self._revert(previous)
+        reverted = self._revert(previous, key)
         return Outcome(
             ok=False,
             message=f"{key}={value} killed telemetry; reverted {', '.join(reverted)}",
@@ -384,7 +392,7 @@ class AnvilAdapter:
         entry = self.journal.read()
         if entry is None:
             return Outcome(ok=False, message="no change is open")
-        restored = restore(entry["files"])
+        restored = self._restore_files(entry["files"], str(entry.get("key") or ""))
         self._restart_data_plane()
         self.journal.close()
         return Outcome(
@@ -397,10 +405,46 @@ class AnvilAdapter:
         """What every file this write touches holds right now."""
         return {path: self._read(path) for path in self._paired_edits(key, value)}
 
-    def _revert(self, previous: dict) -> list[str]:
-        restored = restore({str(path): text for path, text in previous.items()})
+    def _revert(self, previous: dict, key: str = "") -> list[str]:
+        restored = self._restore_files(
+            {str(path): text for path, text in previous.items()}, key
+        )
         self._restart_data_plane()
         self.journal.close()
+        return restored
+
+    def _restore_files(self, files: dict, key: str = "") -> list[str]:
+        """Put journalled contents back, through the writer where root owns them.
+
+        The plain restore writes files directly and skips what it cannot write,
+        which on a robot would leave the fleet file holding the value that killed
+        telemetry while the loader's file went back — the half state a revert
+        exists to prevent. So a file this process cannot replace is restored key
+        by key instead, from the text the journal kept. Only the key that changed
+        is put back: rewriting the others to values they already hold would spend
+        a sudo call each to change nothing.
+        """
+        direct = {path: text for path, text in files.items() if _writable(Path(path))}
+        restored = restore(direct)
+        for path, text in files.items():
+            if path in direct:
+                continue
+            held = env_values(text)
+            for changed, aliases in PAIRED_KEYS.items():
+                if key and changed != key:
+                    continue
+                for alias in aliases:
+                    if alias not in held:
+                        continue
+                    try:
+                        self._fleet_write(changed, held[alias])
+                    except AdapterError as exc:
+                        # Reported, not raised: a revert that stops at the first
+                        # failure leaves more behind than one that carries on.
+                        print(f"fm-robot-agent: {exc}", file=sys.stderr, flush=True)
+                    else:
+                        restored.append(path)
+                    break
         return restored
 
     def _restart_data_plane(self) -> None:
@@ -530,9 +574,16 @@ class AnvilAdapter:
         """
         edits = self._paired_edits(key, value)
         previous = {path: self._read(path) for path in edits}
+        # The fleet file is root's on a real robot, because two systemd units
+        # read it, and the agent runs unprivileged. Where it cannot be written
+        # directly it goes through the writer fm-setup's `robot-sudo` installs —
+        # which is the only reason a paired write is possible at all there.
+        by_hand = {path: text for path, text in edits.items() if _writable(path)}
+        delegated = [path for path in edits if path not in by_hand]
+
         staged = {}
         try:
-            for path, text in edits.items():
+            for path, text in by_hand.items():
                 tmp = path.with_suffix(path.suffix + ".tmp")
                 tmp.write_text(text, encoding="utf-8")
                 staged[path] = tmp
@@ -550,7 +601,45 @@ class AnvilAdapter:
                     _write_atomic(done, previous[done])
                 raise AdapterError(f"{key} could not be written to {path}: {exc}") from exc
             replaced.append(path)
+
+        for path in delegated:
+            try:
+                self._fleet_write(key, value)
+            except AdapterError:
+                # Put back what was already written. Half a paired write is the
+                # disagreement the pairing exists to make impossible, and a
+                # caller seeing the error must be able to trust nothing moved.
+                for done in replaced:
+                    _write_atomic(done, previous[done])
+                raise
         return previous
+
+    def _fleet_write(self, key: str, value: str) -> None:
+        """Set a key in the fleet file through the writer, as root.
+
+        One `sudo -n` per alias. It never prompts: where `robot-sudo` has granted
+        this path it is silent, and where it has not it fails immediately with
+        sudo's own message rather than hanging on a password nobody is there to
+        type. The writer decides what the value may be — this passes it on and
+        reports what it said.
+        """
+        for alias in PAIRED_KEYS.get(key, ()):
+            try:
+                done = subprocess.run(
+                    ["sudo", "-n", str(FLEET_WRITER), alias, value],
+                    capture_output=True,
+                    text=True,
+                    timeout=COMPOSE_TIMEOUT_S,
+                    check=False,
+                )
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                raise AdapterError(f"{alias} could not be written: {exc}") from exc
+            if done.returncode != 0:
+                reason = (done.stderr or done.stdout).strip() or f"exit {done.returncode}"
+                raise AdapterError(f"{alias} could not be written: {reason}")
+            # The domain has two spellings and the writer sets both from either,
+            # so the second call would be a no-op that only doubles the sudo.
+            return
 
     def _apply(self, klass: str) -> str:
         """Make the containers see a written key, and say what was done.
@@ -790,6 +879,17 @@ def _integer(key: str, value: str, low: int, high: int | None) -> str:
         ceiling = high if high is not None else "no maximum"
         return _refuse_value(f"{key} is between {low} and {ceiling}")
     return str(number)
+
+
+def _writable(path: Path) -> bool:
+    """Whether this process can replace ``path`` itself.
+
+    The directory decides, not the file: replacing is a rename, and a file the
+    agent cannot open for writing is still replaceable when it owns the
+    directory. On the Anvil the loader directory is the account's and /etc is
+    not, which is exactly the split this answers.
+    """
+    return os.access(path.parent, os.W_OK) and (not path.exists() or os.access(path, os.W_OK))
 
 
 def _write_atomic(path: Path, text: str) -> None:

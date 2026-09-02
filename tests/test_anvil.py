@@ -496,7 +496,7 @@ def test_a_revert_restarts_the_stack_and_the_bridge(dead_telemetry):
 def test_a_second_severing_write_while_one_is_open_is_refused(adapter, monkeypatch):
     """Two overlapping reverts would restore each other's intermediate state."""
     monkeypatch.setattr(adapter, "_data_plane_returns", lambda: False)
-    monkeypatch.setattr(adapter, "_revert", lambda previous: [])
+    monkeypatch.setattr(adapter, "_revert", lambda previous, key="": [])
     adapter.config_write("ROS_DOMAIN_ID", "7")
     assert adapter.config_write("CYCLONEDDS_IFACE", "eth0").ok is False
 
@@ -520,3 +520,81 @@ def test_an_agent_that_starts_with_no_open_window_does_nothing(adapter):
 
 def test_rollback_with_nothing_open_says_so(adapter):
     assert adapter.config_rollback().ok is False
+
+
+# --- the fleet file the agent does not own -----------------------------------
+
+
+@pytest.fixture
+def root_owned_fleet_file(adapter, loader, monkeypatch):
+    """A fleet file this process cannot replace, as /etc/fm-comms.env is.
+
+    Read-only on the *directory*, because replacing a file is a rename: that is
+    what /etc looks like to an unprivileged agent, and what the loader directory
+    never does.
+    """
+    etc = loader / "etc"
+    etc.mkdir()
+    fleet = etc / "fm-comms.env"
+    fleet.write_text("FM_ROS_DOMAIN_ID=0\nROS_DOMAIN_ID=0\nFM_DDS_IFACE=eth0\n", encoding="utf-8")
+    adapter.comms_env = fleet
+    monkeypatch.setattr(anvil, "_writable", lambda path: path != fleet)
+
+    written = []
+
+    def fake_run(argv, **kwargs):
+        if argv[:2] == ["sudo", "-n"]:
+            written.append(argv[2:])
+            return subprocess.CompletedProcess(argv, 0, "", "")
+        return subprocess.CompletedProcess(argv, 0, COMPOSE_PS, "")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    return written
+
+
+def test_a_root_owned_fleet_file_is_written_through_the_helper(
+    adapter, loader, root_owned_fleet_file
+):
+    """The agent runs unprivileged; two systemd units own that file."""
+    assert adapter.config_write("ROS_DOMAIN_ID", "7").ok is True
+    assert root_owned_fleet_file == [[str(anvil.FLEET_WRITER), "FM_ROS_DOMAIN_ID", "7"]]
+    assert "ROS_DOMAIN_ID=7" in (loader / ".env.config").read_text()
+
+
+def test_the_interface_goes_through_the_helper_too(adapter, root_owned_fleet_file):
+    assert adapter.config_write("CYCLONEDDS_IFACE", "eth1").ok is True
+    assert root_owned_fleet_file == [[str(anvil.FLEET_WRITER), "FM_DDS_IFACE", "eth1"]]
+
+
+def test_a_helper_that_is_not_granted_leaves_the_first_file_unchanged(
+    adapter, loader, root_owned_fleet_file, monkeypatch
+):
+    """`sudo -n` fails immediately where robot-sudo has not run. Neither file moves."""
+    before = (loader / ".env.config").read_text()
+
+    def refuse(argv, **kwargs):
+        if argv[:2] == ["sudo", "-n"]:
+            return subprocess.CompletedProcess(argv, 1, "", "sudo: a password is required")
+        return subprocess.CompletedProcess(argv, 0, COMPOSE_PS, "")
+
+    monkeypatch.setattr(subprocess, "run", refuse)
+    with pytest.raises(AdapterError, match="password"):
+        adapter.config_write("ROS_DOMAIN_ID", "7")
+    assert (loader / ".env.config").read_text() == before
+
+
+def test_a_revert_puts_the_fleet_file_back_through_the_helper(
+    adapter, loader, root_owned_fleet_file, monkeypatch
+):
+    """A revert that skipped that file would leave the value that killed telemetry."""
+    monkeypatch.setattr(adapter, "_telemetry_arrives", lambda: False)
+    monkeypatch.setattr(anvil, "VERIFY_WINDOW_S", 0.0)
+    monkeypatch.setattr(anvil, "VERIFY_INTERVAL_S", 0.0)
+
+    outcome = adapter.config_write("ROS_DOMAIN_ID", "7")
+
+    assert outcome.ok is False
+    # Written forward once, then put back at the value the journal held.
+    assert [call[-1] for call in root_owned_fleet_file] == ["7", "0"]
+    # The loader's file goes back to what it held, which the fixture set to 1.
+    assert "ROS_DOMAIN_ID=1" in (loader / ".env.config").read_text()
