@@ -20,7 +20,7 @@ from fm_robot_agent.config import (
     UNKNOWN,
     Setting,
 )
-from fm_robot_agent.protocol import Outcome
+from fm_robot_agent.protocol import Outcome, task_not_recorded
 
 MODES = ("idle", "teleop")
 
@@ -109,7 +109,12 @@ class FakeAdapter:
         self.pending = None
         return Outcome(ok=True, message=f"{key} restored", detail={"key": key})
 
-    def record(self, dataset: str, action: str) -> Outcome:
+    def record(self, dataset: str, action: str, task: str = "") -> Outcome:
+        # The same refusal both real adapters make, so a caller that exercises
+        # the fake sees the answer the hardware would give rather than a
+        # capability only the double has.
+        if task:
+            return task_not_recorded("the fake recorder")
         if action == "start":
             if self.recording is not None:
                 return Outcome(ok=False, message=f"already recording into {self.recording}")

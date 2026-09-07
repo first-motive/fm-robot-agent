@@ -44,7 +44,7 @@ from fm_robot_agent.config import (
     UNKNOWN,
     Setting,
 )
-from fm_robot_agent.protocol import AdapterError, Outcome
+from fm_robot_agent.protocol import AdapterError, Outcome, task_not_recorded
 
 KIND = "axol"
 
@@ -362,7 +362,19 @@ class AxolAdapter:
             )
         return None
 
-    def record(self, dataset: str, action: str) -> Outcome:
+    def record(self, dataset: str, action: str, task: str = "") -> Outcome:
+        """Start or stop `collect-data`, which takes a dataset and nothing else.
+
+        Almond's `run-policy` names its task field in its own error message —
+        `Missing required field(s) policy_path, policy_type, task` — and that is
+        why `set_mode` can send one. `collect-data` has published no such
+        message and no schema this repo has read, so a `task` argument sent here
+        would be a name invented on this side of the wire: at best ignored, at
+        worst a 500 with the reason only in the robot's journal. Refused until
+        the operation's own arguments are read off the robot.
+        """
+        if task:
+            return task_not_recorded(f"the Axol's {RECORD_OPERATION}")
         if action == "start":
             started = self._post(
                 "/api/op/start",

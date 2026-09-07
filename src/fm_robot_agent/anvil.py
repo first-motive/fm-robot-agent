@@ -46,7 +46,7 @@ from fm_robot_agent.config import (
     env_values,
     restore,
 )
-from fm_robot_agent.protocol import AdapterError, Outcome
+from fm_robot_agent.protocol import AdapterError, Outcome, task_not_recorded
 from fm_robot_agent.trpc import TrpcClient
 
 KIND = "anvil-openarm-v2"
@@ -238,7 +238,15 @@ class AnvilAdapter:
             return Outcome(ok=False, message=f"{self.kind} modes take no arguments")
         return self.config_write(MODE_ALIAS, config)
 
-    def record(self, dataset: str, action: str) -> Outcome:
+    def record(self, dataset: str, action: str, task: str = "") -> Outcome:
+        """Start or stop a webapp recording session, which carries no task text.
+
+        The session is created from the workcell's own topic set and a note; the
+        recorder writes MCAP, not a LeRobot dataset, and nothing in either
+        carries an instruction sentence.
+        """
+        if task:
+            return task_not_recorded("the Anvil's recorder")
         if action == "start":
             session = self._find_or_create_session(dataset)
             episode_id = self.webapp.call(

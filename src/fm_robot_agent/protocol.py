@@ -46,6 +46,25 @@ class Outcome:
     detail: dict = field(default_factory=dict)
 
 
+def task_not_recorded(recorder: str) -> Outcome:
+    """Refuse a task sentence a recorder has no field to write it into.
+
+    Shared by every adapter, because the answer is the same wherever it is
+    asked: the recording still happens, and the instruction is written onto the
+    episodes afterwards. Refusing beats accepting, which would produce a
+    hundred episodes whose task text is the recorder's own default and a policy
+    that learned to ignore the instruction.
+    """
+    return Outcome(
+        ok=False,
+        message=(
+            f"{recorder} writes no task sentence, so --task would be dropped. "
+            "Record without it, then set the text with "
+            "`fm policy dataset relabel <dataset> --task ...`"
+        ),
+    )
+
+
 @runtime_checkable
 class RobotAdapter(Protocol):
     """One robot's implementation of the fixed verb set."""
@@ -104,11 +123,17 @@ class RobotAdapter(Protocol):
         verification the agent did not survive is still undone.
         """
 
-    def record(self, dataset: str, action: str) -> Outcome:
+    def record(self, dataset: str, action: str, task: str = "") -> Outcome:
         """Start or stop recording an episode into ``dataset``.
 
         ``action`` is ``start`` or ``stop``; the router validates that before
         calling. A started episode is returned in ``detail["episode"]``.
+
+        ``task`` is the instruction the episode demonstrates — "put the nuts in
+        the bag" — which a language-conditioned policy trains on and which the
+        recorder has to write into the dataset for it to survive. An adapter
+        whose recorder has no field for one refuses through
+        :func:`task_not_recorded` rather than accepting a sentence it will drop.
         """
 
     def stop(self) -> Outcome:

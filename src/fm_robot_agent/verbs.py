@@ -10,7 +10,8 @@ episode queryable uses, for the same reason: the suite runs with no router.
     fm/robot/<ns>/up          write   bring the stack up
     fm/robot/<ns>/down        write   take the stack down
     fm/robot/<ns>/config      write   {"action": "get"|"set"|"rollback", ...}
-    fm/robot/<ns>/record      write   {"dataset": "...", "action": "start"|"stop"}
+    fm/robot/<ns>/record      write   {"dataset": "...", "action": "start"|"stop",
+                                        "task": "..."}
     fm/robot/<ns>/stop        write   halt motion, vendor mechanism
     fm/robot/<ns>/episodes    read    ?dataset=<slug>
 
@@ -257,11 +258,17 @@ def answer(
         # record
         dataset = body.get("dataset") or ""
         action = body.get("action") or ""
+        task = body.get("task") or ""
         if not isinstance(dataset, str) or not _valid_dataset(dataset):
             return _refuse(key, "invalid dataset name")
         if action not in RECORD_ACTIONS:
             return _refuse(key, f"action must be one of {RECORD_ACTIONS}")
-        return _outcome(key, adapter.record(dataset, action))
+        # A sentence, not a name: it is written into the dataset rather than
+        # into a path, so its only shape rule is that it is text. Whether the
+        # robot can record one is the adapter's answer, not the router's.
+        if not isinstance(task, str):
+            return _refuse(key, "task must be the instruction sentence, as text")
+        return _outcome(key, adapter.record(dataset, action, task))
     except AdapterError as exc:
         # The robot answered with a refusal, or did not answer. Either way the
         # caller gets the reason rather than a timeout it has to guess about.

@@ -10,6 +10,7 @@ and the reply into either a line a person reads or the JSON a script does.
     fm robot fm-rob-01 config set CYCLONEDDS_VERBOSITY=fine
     fm robot fm-rob-01 config rollback
     fm robot fm-rob-01 record start --dataset grocery-sort-v1
+    fm robot fm-rob-02 record start --dataset checkers-bag-v1 --task "put the nuts in the bag"
     fm robot list
 
 ``list`` is a wildcard query over ``fm/robot/*/status``: the fabric is the
@@ -88,7 +89,10 @@ def build_payload(verb: str, args: argparse.Namespace) -> dict | None:
         key, _, value = (args.assignment or "").partition("=")
         return {"action": "set", "key": key, "value": value}
     if verb == "record":
-        return {"dataset": args.dataset, "action": args.value or "start"}
+        body = {"dataset": args.dataset, "action": args.value or "start"}
+        if args.task:
+            body["task"] = args.task
+        return body
     return None
 
 
@@ -185,6 +189,12 @@ def main(argv: list[str] | None = None) -> int:
         "(run-policy wants policy_path, policy_type and task)",
     )
     parser.add_argument("--dataset", default="", help="the dataset a record or episodes verb acts on")
+    parser.add_argument(
+        "--task",
+        default="",
+        help="record: the instruction the episode demonstrates, written into the dataset "
+        "(refused by a robot whose recorder has no field for one)",
+    )
     parser.add_argument("--json", action="store_true", dest="as_json", help="print the raw reply")
     args = parser.parse_args(argv)
 

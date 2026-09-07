@@ -239,6 +239,15 @@ def test_record_start_scopes_the_dataset_to_the_configured_owner(adapter, server
     assert payload["args"]["repo_id"] == "axol/pick-place"
 
 
+def test_record_refuses_a_task_collect_data_has_no_field_for(adapter, server):
+    """`run-policy` names its task field; `collect-data` never has, so this refuses."""
+    outcome = adapter.record("pick-place", "start", "put the nuts in the bag")
+
+    assert outcome.ok is False
+    assert "fm policy dataset relabel" in outcome.message
+    assert server.running_op is None
+
+
 def test_record_stop_stops_the_operation(adapter, server):
     adapter.record("pick-place", "start")
     adapter.record("pick-place", "stop")
