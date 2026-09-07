@@ -188,6 +188,20 @@ def test_record_needs_a_known_action(robot):
     assert reply.ok is False
 
 
+def test_record_refuses_a_task_the_recorder_cannot_write(robot):
+    """The refusal is the adapter's; the router carries the sentence to it."""
+    reply = body(ask(robot, "record", payload={
+        "dataset": "pick-place", "action": "start", "task": "put the nuts in the bag"
+    }))
+    assert reply["ok"] is False
+    assert "fm policy dataset relabel" in reply["message"]
+
+
+def test_record_refuses_a_task_that_is_not_text(robot):
+    reply = ask(robot, "record", payload={"dataset": "pick-place", "action": "start", "task": 7})
+    assert reply.ok is False
+
+
 def test_record_refuses_a_dataset_that_is_a_path(robot):
     reply = ask(robot, "record", payload={"dataset": "../etc", "action": "start"})
     assert reply.ok is False
@@ -230,7 +244,7 @@ class UnreachableRobot:
     def config_read(self) -> list: ...
     def config_write(self, key: str, value: str) -> Outcome: ...
     def config_rollback(self) -> Outcome: ...
-    def record(self, dataset: str, action: str) -> Outcome: ...
+    def record(self, dataset: str, action: str, task: str = "") -> Outcome: ...
     def stop(self) -> Outcome: ...
     def episodes(self, dataset: str) -> list[dict]: ...
 

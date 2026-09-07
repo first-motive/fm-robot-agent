@@ -60,12 +60,19 @@ fm robot fm-rob-01 config get
 fm robot fm-rob-01 config set CYCLONEDDS_VERBOSITY=fine
 fm robot fm-rob-01 config rollback
 fm robot fm-rob-01 record start --dataset grocery-sort-v1
+fm robot fm-rob-02 record start --dataset checkers-bag-v1 --task "put the nuts in the bag"
 fm robot fm-rob-01 stop
 ```
 
 `list` is a wildcard query, so discovering a robot takes no hostname and no
 port. A robot that answers is online by definition. `mode` is sugar over
 `config set` of the one key each robot spells its own way.
+
+`--task` is the instruction the episode demonstrates, which a
+language-conditioned policy trains on. A robot whose recorder has no field for
+one refuses rather than dropping the sentence: record without it, then write the
+text onto the episodes with `fm policy dataset relabel`. Neither recorder takes
+one today.
 
 A severing write answers only once the robot has watched its own telemetry come
 back, which takes the stack's recreate plus the bridge's discovery — up to 90

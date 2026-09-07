@@ -11,7 +11,7 @@ from fm_robot_agent import client
 
 
 def args(**overrides) -> argparse.Namespace:
-    return argparse.Namespace(**{"value": None, "dataset": "", "arg": None, **overrides})
+    return argparse.Namespace(**{"value": None, "dataset": "", "arg": None, "task": "", **overrides})
 
 
 def test_a_device_name_derives_the_namespace():
@@ -63,6 +63,23 @@ def test_record_defaults_to_starting():
 
 def test_record_stop_is_explicit():
     assert client.build_payload("record", args(dataset="pick-place", value="stop"))["action"] == "stop"
+
+
+def test_record_carries_the_task_when_one_is_given():
+    """The instruction a language-conditioned policy trains on, onto the wire."""
+    payload = client.build_payload(
+        "record", args(dataset="checkers-bag-v1", task="put the nuts in the bag")
+    )
+    assert payload == {
+        "dataset": "checkers-bag-v1",
+        "action": "start",
+        "task": "put the nuts in the bag",
+    }
+
+
+def test_record_without_a_task_sends_no_task_key():
+    """An absent instruction is absent, not an empty sentence the robot has to read."""
+    assert "task" not in client.build_payload("record", args(dataset="pick-place"))
 
 
 # --- usage -------------------------------------------------------------------
