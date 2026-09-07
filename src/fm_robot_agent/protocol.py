@@ -67,12 +67,18 @@ class RobotAdapter(Protocol):
     def down(self) -> Outcome:
         """Take the robot's stack down."""
 
-    def set_mode(self, config: str) -> Outcome:
+    def set_mode(self, config: str, args: dict[str, str] | None = None) -> Outcome:
         """Switch control mode. ``config`` is one of the values ``status`` reports.
 
-        Sugar over ``config_write(MODE_ALIAS, config)``, kept because `fm robot
-        <name> mode <value>` predates the config verb and still reads better than
-        naming the key each robot happens to spell it with.
+        Sugar over ``config_write(MODE_ALIAS, config)`` where a mode needs nothing
+        else, kept because `fm robot <name> mode <value>` predates the config verb
+        and still reads better than naming the key each robot happens to spell it
+        with.
+
+        ``args`` carries what the operation itself requires, which is not the same
+        as configuration: Almond's ``run-policy`` needs a policy, its type and a
+        task per start, and none of the three is a setting the robot stores. An
+        adapter whose modes take no arguments ignores it.
         """
 
     def config_read(self) -> list[Setting]:

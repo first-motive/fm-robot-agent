@@ -8,11 +8,10 @@ import json
 import pytest
 
 from fm_robot_agent import client
-from fm_robot_agent.config import MODE_ALIAS
 
 
 def args(**overrides) -> argparse.Namespace:
-    return argparse.Namespace(**{"value": None, "dataset": "", **overrides})
+    return argparse.Namespace(**{"value": None, "dataset": "", "arg": None, **overrides})
 
 
 def test_a_device_name_derives_the_namespace():
@@ -24,14 +23,35 @@ def test_verbs_without_a_body_send_none(verb):
     assert client.build_payload(verb, args()) is None
 
 
-def test_mode_is_sugar_over_a_config_write():
-    """`mode` predates the config verb; the adapter resolves the alias to its key."""
+def test_mode_is_a_verb_of_its_own():
+    """A mode's arguments are not configuration, so it stopped being a config write.
+
+    Almond's `run-policy` needs a policy, its type and a task per start, and the
+    robot stores none of them. Sending those through a settings write would have
+    made the wire describe the wrong thing.
+    """
     assert client.build_payload("mode", args(value="openarm_v2_quest_teleop.yaml")) == {
-        "action": "set",
-        "key": MODE_ALIAS,
         "value": "openarm_v2_quest_teleop.yaml",
     }
-    assert client.wire_verb("mode") == "config"
+    assert client.wire_verb("mode") == "mode"
+
+
+def test_mode_carries_the_arguments_an_operation_needs():
+    payload = client.build_payload(
+        "mode",
+        args(
+            value="policy",
+            arg=["policy_path=first-motive/policy-act-1", "policy_type=act", "task=open the cup"],
+        ),
+    )
+    assert payload == {
+        "value": "policy",
+        "args": {
+            "policy_path": "first-motive/policy-act-1",
+            "policy_type": "act",
+            "task": "open the cup",
+        },
+    }
 
 
 def test_record_defaults_to_starting():

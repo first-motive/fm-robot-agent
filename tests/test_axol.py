@@ -26,6 +26,10 @@ class ServerStub:
     def __init__(self) -> None:
         self.requests: list[tuple[str, str, dict | None]] = []
         self.running_op: str | None = None
+        # Recorded because the real server refuses a start whose args are wrong,
+        # and a fake that drops them accepted an argument-less `run-policy` — the
+        # assumption that cost a bench session.
+        self.started_args: dict = {}
         self.state = "connected"
         self.refuse: set[str] = set()
 
@@ -43,6 +47,7 @@ class ServerStub:
             return {"running": False, "session": self.exited_session}
         if path == "/api/op/start":
             self.running_op = payload["op"]
+            self.started_args = dict(payload.get("args") or {})
             return {"id": "s2", "command": self.running_op}
         if path == "/api/op/stop":
             if self.running_op is None:
@@ -122,9 +127,50 @@ def test_status_reports_the_contract_fields(adapter):
 
 
 def test_status_names_the_running_mode_in_fleet_terms(adapter, server):
-    adapter.set_mode("policy")
+    adapter.set_mode("teleop")
+    assert server.running_op == "teleop"
+    assert adapter.status()["mode"] == "teleop"
+
+
+def test_policy_mode_refuses_without_what_run_policy_requires(adapter, server):
+    """Almond answers a missing field with a bare 500 and no reason on the wire.
+
+    `run-policy` needs `policy_path`, `policy_type` and `task`, none of them a
+    setting the robot stores. This test used to start `policy` with no arguments
+    at all and pass, because the fake server accepted them — the assumption was
+    wrong on hardware, where the reason reached only the robot's journal.
+    """
+    outcome = adapter.set_mode("policy")
+
+    assert outcome.ok is False
+    for field in ("policy_path", "policy_type", "task"):
+        assert field in outcome.message
+    assert server.running_op is None, "a refused mode must not start an operation"
+
+
+def test_policy_mode_starts_with_its_arguments(adapter, server):
+    outcome = adapter.set_mode(
+        "policy",
+        {
+            "policy_path": "first-motive/policy-act-1",
+            "policy_type": "act",
+            "task": "open the cup",
+        },
+    )
+
+    assert outcome.ok is True
     assert server.running_op == "run-policy"
-    assert adapter.status()["mode"] == "policy"
+    assert server.started_args["policy_path"] == "first-motive/policy-act-1"
+    assert server.started_args["task"] == "open the cup"
+
+
+def test_a_partly_supplied_policy_mode_names_only_what_is_missing(adapter, server):
+    outcome = adapter.set_mode("policy", {"policy_type": "act"})
+
+    assert outcome.ok is False
+    assert "policy_path" in outcome.message
+    assert "task" in outcome.message
+    assert "policy_type" not in outcome.message
 
 
 def test_a_session_that_exited_is_not_a_mode(adapter, server):

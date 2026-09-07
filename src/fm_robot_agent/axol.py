@@ -64,6 +64,24 @@ MODES = {
 
 RECORD_OPERATION = "collect-data"
 
+#: What Almond's `run-policy` refuses to start without. Read from its own
+#: `RunPolicyConfig`, where the three carry no default and every other field does.
+#:
+#: They are arguments, not settings: a policy, its architecture and the task
+#: sentence change per session, and Almond stores none of them. Sending the mode
+#: alone answered `500 Internal Server Error` from `/api/op/start`, with the real
+#: reason only in the robot's journal — `Missing required field(s) policy_path,
+#: policy_type, task`.
+#:
+#: `policy_path` is resolved by whichever machine runs inference, not by the
+#: robot: with `--server_host` set, Almond's own docs say the server "downloads
+#: the policy itself, so the path must be reachable from it, e.g. a HF Hub repo
+#: id".
+RUN_POLICY_REQUIRED = ("policy_path", "policy_type", "task")
+
+#: The mode whose operation takes those arguments.
+POLICY_MODE = "policy"
+
 #: Curated settings that shape how the arms move, by exact key or by prefix.
 #: Everything Almond curates and this does not name is written through: an fps,
 #: a codec, a log level and an inference host change what the robot records or
@@ -201,7 +219,7 @@ class AxolAdapter:
         answered = self._post("/api/robot/disconnect", {})
         return Outcome(ok=True, message="link disconnected", detail={"state": answered.get("state", "")})
 
-    def set_mode(self, config: str) -> Outcome:
+    def set_mode(self, config: str, args: dict[str, str] | None = None) -> Outcome:
         """Stop whatever operation runs and start the one this mode names.
 
         No ``cameras`` key. Almond's start request types it ``dict | None``, and
@@ -214,8 +232,20 @@ class AxolAdapter:
         operation = MODES.get(config)
         if operation is None:
             return Outcome(ok=False, message=f"unknown mode {config!r}; expected one of {sorted(MODES)}")
+        supplied = dict(args or {})
+        if config == POLICY_MODE:
+            missing = [field for field in RUN_POLICY_REQUIRED if not supplied.get(field)]
+            if missing:
+                # Refused here rather than sent and rejected: Almond answers a
+                # missing field with a bare 500, and the reason reaches only its
+                # own journal on the robot. Naming them is the difference between
+                # a fixable message and a bench session.
+                return Outcome(
+                    ok=False,
+                    message=f"mode {config} needs {', '.join(missing)}",
+                )
         self._stop_operation()
-        started = self._post("/api/op/start", {"op": operation, "args": {}})
+        started = self._post("/api/op/start", {"op": operation, "args": supplied})
         return Outcome(
             ok=True,
             message=f"mode {config}",

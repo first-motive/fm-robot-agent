@@ -35,7 +35,7 @@ from fm_robot_agent.protocol import SCHEMA_VERSION, AdapterError, Outcome, Robot
 KEY_PREFIX = "fm/robot"
 
 READ_VERBS = ("status", "episodes")
-WRITE_VERBS = ("up", "down", "config", "record", "stop")
+WRITE_VERBS = ("up", "down", "config", "mode", "record", "stop")
 VERBS = READ_VERBS + WRITE_VERBS
 
 RECORD_ACTIONS = ("start", "stop")
@@ -44,6 +44,11 @@ RECORD_ACTIONS = ("start", "stop")
 #: neighbour rather than a read one: a wildcard discovery query has no business
 #: enumerating every robot's transport configuration.
 CONFIG_ACTIONS = ("get", "set", "rollback")
+
+#: Ceiling on the arguments one mode may carry, and on each value in them.
+#: Almond's `run-policy` takes three; a caller sending hundreds is spending the
+#: agent's memory rather than starting an operation.
+MAX_MODE_ARGS = 16
 
 #: Ceiling on one configuration value. Every value either robot holds is a
 #: number, a boolean, an interface name, or a filename.
@@ -107,6 +112,44 @@ def _body(payload: bytes | None) -> dict:
 #: this is how `fm robot list` and the desktop find robots with no hostname and
 #: no registry. Every other segment must match this agent's own namespace.
 DISCOVERY_SEGMENT = "*"
+
+
+def _mode(key: str, adapter: RobotAdapter, body: dict) -> Reply:
+    """Switch control mode, carrying whatever the operation itself needs.
+
+    A verb of its own rather than more sugar over `config set`: a mode's
+    arguments are not configuration. Almond stores `inference.server_host` and
+    reads it on every start; it stores no `policy_path`, because which policy
+    runs is a decision per session. Threading those through a settings write
+    would have made the wire lie about what it was doing.
+
+    Values are strings and the adapter is handed nothing else, the same contract
+    `_config` holds: what is checked here is shape, and what a key means is the
+    adapter's business.
+    """
+    value = body.get("value")
+    if not isinstance(value, str) or not value:
+        return _refuse(key, "mode needs a value")
+    if len(value) > MAX_VALUE_LEN:
+        return _refuse(key, f"mode is longer than {MAX_VALUE_LEN} characters")
+
+    raw = body.get("args") or {}
+    if not isinstance(raw, dict):
+        return _refuse(key, "args must be an object")
+    if len(raw) > MAX_MODE_ARGS:
+        return _refuse(key, f"more than {MAX_MODE_ARGS} arguments")
+    args: dict[str, str] = {}
+    for name, supplied in raw.items():
+        if not isinstance(name, str) or not name:
+            return _refuse(key, "every argument needs a name")
+        if isinstance(supplied, (bool, int, float)):
+            supplied = str(supplied).lower() if isinstance(supplied, bool) else str(supplied)
+        if not isinstance(supplied, str) or not supplied:
+            return _refuse(key, f"argument {name} needs a value")
+        if len(supplied) > MAX_VALUE_LEN:
+            return _refuse(key, f"argument {name} is longer than {MAX_VALUE_LEN} characters")
+        args[name] = supplied
+    return _outcome(key, adapter.set_mode(value, args or None))
 
 
 def _config(key: str, adapter: RobotAdapter, body: dict) -> Reply:
@@ -207,6 +250,9 @@ def answer(
 
         if verb == "config":
             return _config(key, adapter, body)
+
+        if verb == "mode":
+            return _mode(key, adapter, body)
 
         # record
         dataset = body.get("dataset") or ""
