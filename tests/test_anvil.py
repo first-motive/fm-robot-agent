@@ -663,3 +663,15 @@ def test_the_window_opens_only_after_the_restart_has_finished(adapter, monkeypat
 
     assert order[0] == "recreate", "telemetry was sampled before the stack came back"
     assert "probe" in order
+
+
+def test_openarm_modes_take_no_arguments(adapter):
+    """A launch file takes none, so one supplied is refused rather than dropped.
+
+    A caller who passed an argument meant something by it. Ignoring it silently
+    would start a mode that is not the one they asked for.
+    """
+    outcome = adapter.set_mode("openarm_v2_quest_teleop.yaml", {"policy_path": "x"})
+
+    assert outcome.ok is False
+    assert "no arguments" in outcome.message

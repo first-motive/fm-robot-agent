@@ -27,7 +27,6 @@ import json
 import re
 import sys
 
-from fm_robot_agent.config import MODE_ALIAS
 from fm_robot_agent.env import EndpointError, router_endpoint
 from fm_robot_agent.verbs import CONFIG_ACTIONS, KEY_PREFIX, READ_VERBS, VERBS
 
@@ -73,7 +72,15 @@ def safe(text: object) -> str:
 def build_payload(verb: str, args: argparse.Namespace) -> dict | None:
     """The body a write verb carries, or ``None`` for one that carries none."""
     if verb == MODE_SUGAR:
-        return {"action": "set", "key": MODE_ALIAS, "value": args.value}
+        # `mode` is its own verb on the wire now, not a config write. What a mode
+        # needs to start — Almond's run-policy wants a policy, its type and a
+        # task — is not configuration the robot stores, and sending it through a
+        # settings write made the wire describe the wrong thing.
+        body: dict = {"value": args.value}
+        supplied = dict(pair.partition("=")[::2] for pair in (args.arg or []))
+        if supplied:
+            body["args"] = supplied
+        return body
     if verb == "config":
         action = args.value or "get"
         if action != "set":
@@ -86,8 +93,8 @@ def build_payload(verb: str, args: argparse.Namespace) -> dict | None:
 
 
 def wire_verb(verb: str) -> str:
-    """The key a typed verb lands on. `mode` is sugar over `config`."""
-    return "config" if verb == MODE_SUGAR else verb
+    """The key a typed verb lands on. Every typed verb now names its own."""
+    return verb
 
 
 def render_config(reply: dict) -> None:
@@ -170,6 +177,13 @@ def main(argv: list[str] | None = None) -> int:
         help=f"mode: the config; record: start | stop; config: {' | '.join(CONFIG_ACTIONS)}",
     )
     parser.add_argument("assignment", nargs="?", help="config set: KEY=VALUE")
+    parser.add_argument(
+        "--arg",
+        action="append",
+        metavar="KEY=VALUE",
+        help="mode: an argument the operation needs, repeatable "
+        "(run-policy wants policy_path, policy_type and task)",
+    )
     parser.add_argument("--dataset", default="", help="the dataset a record or episodes verb acts on")
     parser.add_argument("--json", action="store_true", dest="as_json", help="print the raw reply")
     args = parser.parse_args(argv)

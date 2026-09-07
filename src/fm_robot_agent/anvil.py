@@ -227,8 +227,15 @@ class AnvilAdapter:
     def down(self) -> Outcome:
         return self._compose_detached("down")
 
-    def set_mode(self, config: str) -> Outcome:
-        """Sugar over the config verb, kept because `fm robot X mode Y` predates it."""
+    def set_mode(self, config: str, args: dict[str, str] | None = None) -> Outcome:
+        """Sugar over the config verb, kept because `fm robot X mode Y` predates it.
+
+        An OpenArm mode is a launch file and takes no arguments, so `args` is
+        refused rather than dropped: a caller who passed one meant something by
+        it, and silently ignoring it would start the wrong thing quietly.
+        """
+        if args:
+            return Outcome(ok=False, message=f"{self.kind} modes take no arguments")
         return self.config_write(MODE_ALIAS, config)
 
     def record(self, dataset: str, action: str) -> Outcome:
