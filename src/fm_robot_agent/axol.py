@@ -173,6 +173,18 @@ class AxolAdapter:
             "recording": running and session.get("command") == RECORD_OPERATION,
             "services": [{"name": "almond-axol", "state": robot.get("state", "unknown")}],
             "disk": None,
+            # Forwarded whole, and worth one warning to whoever reads it next:
+            # a motor's `status` is not an enable state, and its `voltage` is not
+            # a rail reading. On fm-rob-02 both wrists and both grippers report
+            # DISABLED — the grippers at 0.0V — while an operator drives exactly
+            # those joints from the headset under teleop. The same motors stream
+            # live encoder positions with sensor jitter throughout.
+            #
+            # So do not gate on it. A readiness check keyed off these fields
+            # refuses a healthy robot, and nothing in the fleet does that today.
+            # What the field actually tracks is Almond's business; this repo
+            # reports it because the desktop shows it, not because it decides
+            # anything.
             "motors": robot.get("motors"),
         }
 
