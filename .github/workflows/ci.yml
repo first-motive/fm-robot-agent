@@ -1,8 +1,10 @@
 name: CI
 
 on:
+  # Push runs only on integration; feature branches are covered by pull_request
+  # and are not built twice.
   push:
-    branches: ["**"]
+    branches: ["main"]
     paths-ignore: ["LICENSE", "NOTICE", ".gitignore"]
   pull_request:
     paths-ignore: ["LICENSE", "NOTICE", ".gitignore"]
