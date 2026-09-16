@@ -15,7 +15,8 @@ and the reply into either a line a person reads or the JSON a script does.
 
 ``list`` is a wildcard query over ``fm/robot/*/status``: the fabric is the
 registry, so discovering robots takes no hostname, no port, and no second
-service. A robot that answers is online by definition.
+service. A robot that answers is online by definition, and names itself: the
+agent answers under its own key, which this client reads back as ``device``.
 
 The client runs wherever the fleet does — a Mac on the tailnet, a rig on the LAN
 — and needs only the router endpoint, the same one every other component reads.
@@ -63,6 +64,18 @@ CONTROL_CHARACTERS = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
 def namespace_of(device: str) -> str:
     """The namespace a device name derives (``fm-rob-01`` → ``fm_rob_01``)."""
     return device.replace("-", "_")
+
+
+def device_of(key: object) -> str:
+    """The device a reply's key names (``fm/robot/fm_rob_01/status`` → ``fm-rob-01``).
+
+    The agent answers under its own key, never the selector that asked, so the
+    key expression is the only place a wildcard reply carries its robot's name.
+    """
+    parts = str(key).split("/")
+    if len(parts) != 4 or "/".join(parts[:2]) != KEY_PREFIX:
+        return ""
+    return parts[2].replace("_", "-")
 
 
 def safe(text: object) -> str:
@@ -130,9 +143,13 @@ def query(
         if sample is None:
             continue
         try:
-            replies.append(json.loads(bytes(sample.payload)))
+            reply_body = json.loads(bytes(sample.payload))
         except (json.JSONDecodeError, UnicodeDecodeError):
-            replies.append({"ok": False, "error": "reply was not JSON", "key": str(sample.key_expr)})
+            reply_body = {"ok": False, "error": "reply was not JSON", "key": str(sample.key_expr)}
+        # A `list` reply is otherwise anonymous: the payload names no robot, so
+        # the caller sees how many answered and never which ones.
+        device = device_of(sample.key_expr)
+        replies.append({**reply_body, "device": device} if device else reply_body)
     del zenoh
     return replies
 
@@ -157,7 +174,8 @@ def render(replies: list[dict], as_json: bool) -> None:
             # thing an operator needs: a motion refusal is undone by taking the
             # stack down, an unknown one is not undone at all.
             guard = f" ({safe(reply['class'])})" if reply.get("class") else ""
-            print(f"refused{guard}: {safe(reply.get('error') or reply.get('message') or 'no reason given')}")
+            who = f"{safe(reply['device'])}: " if reply.get("device") else ""
+            print(f"{who}refused{guard}: {safe(reply.get('error') or reply.get('message') or 'no reason given')}")
             continue
         if "config" in reply:
             render_config(reply)

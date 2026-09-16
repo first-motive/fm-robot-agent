@@ -202,3 +202,16 @@ def test_a_refusal_names_the_guard_that_refused_it(capsys):
 def test_a_config_write_waits_longer_than_any_other_verb():
     """A severing write is answered only once telemetry has come back."""
     assert client.CONFIG_TIMEOUT_S > client.QUERY_TIMEOUT_S
+
+
+# --- discovery ---------------------------------------------------------------
+
+
+def test_a_reply_key_names_the_robot_that_answered():
+    """`list` is a wildcard, so the key expression is the only name a reply carries."""
+    assert client.device_of("fm/robot/fm_rob_01/status") == "fm-rob-01"
+
+
+def test_a_key_that_is_not_ours_names_no_robot():
+    assert client.device_of("fm/robot/fm_rob_01/status/extra") == ""
+    assert client.device_of("other/ns/fm_rob_01/status") == ""

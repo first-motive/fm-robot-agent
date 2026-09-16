@@ -65,7 +65,9 @@ fm robot fm-rob-01 stop
 ```
 
 `list` is a wildcard query, so discovering a robot takes no hostname and no
-port. A robot that answers is online by definition. `mode` is sugar over
+port. A robot that answers is online by definition, and every reply carries the
+`device` it came from — the agent answers under its own key, never the selector
+that asked, so a wildcard reply names the robot behind it. `mode` is sugar over
 `config set` of the one key each robot spells its own way.
 
 `--task` is the instruction the episode demonstrates, which a
