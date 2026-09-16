@@ -20,9 +20,21 @@
 
 set -euo pipefail
 
+# Where this machine keeps its identity card, resolved the way fm-comms' lib.sh
+# does rather than assumed. A Mac keeps the card under the user's config home, so
+# the Linux path hard-coded here told an operator on the router Mac to run `fm
+# machine init` when they already had — hiding the refusal that is actually true
+# of that host, which is that its card says role `mac`.
+machine_card() {
+  case "$(uname -s)" in
+    Darwin) printf '%s\n' "${XDG_CONFIG_HOME:-$HOME/.config}/fm/machine.json" ;;
+    *)      printf '%s\n' "/etc/fm/machine.json" ;;
+  esac
+}
+
 FM_ROLE=""
 FM_DRY_RUN=0
-FM_MACHINE_FILE="${FM_MACHINE_FILE:-/etc/fm/machine.json}"
+FM_MACHINE_FILE="${FM_MACHINE_FILE:-$(machine_card)}"
 FM_COMMS_ENV_FILE="${FM_COMMS_ENV_FILE:-/etc/fm-comms.env}"
 UNIT_NAME="fm-robot-agent.service"
 
