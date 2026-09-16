@@ -47,7 +47,33 @@ On the robot's own host, once its identity card and fm-comms are in place:
 
 The installer refuses rather than guesses: the card must declare role `robot`
 with a `robot` kind matching the role given, and `/etc/fm-comms.env` must name a
-router. Add `--dry-run` to see what it would write.
+router. Add `--dry-run` to see what it would write. The card is read from
+`/etc/fm/machine.json` on Linux and `~/.config/fm/machine.json` on macOS, the
+same two paths fm-comms resolves.
+
+### On an operator machine
+
+The office Mac mini that hosts the router, and any Mac driving the fleet over
+the tailnet, run the client half and nothing else. There is no unit to install
+here, and `install.sh` refuses such a host on its own terms: its card declares
+role `mac`, not `robot`.
+
+Three things make `fm robot` work on one:
+
+- **The repo, cloned into the fm workspace.** `fm` reads `fm.json` there and
+  mounts the `robot` verb; `fm setup` is what puts it there.
+- **`uv` on `PATH`.** `scripts/run/robot.sh` runs the client through
+  `uv run --project`, which resolves the project on first use.
+- **The router endpoint.** On the Mac mini it comes from fm-comms'
+  `/etc/fm-comms.env`, which the client reads directly — no unit runs there to
+  put it in the environment first. A Mac without fm-comms exports it instead:
+
+```bash
+export FM_ROUTER_ENDPOINT=tcp/<router-tailnet-address>:7447
+```
+
+A client session is opened per command and closed with it, so an operator
+machine holds no state and runs no service.
 
 ## Use
 

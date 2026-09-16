@@ -8,6 +8,10 @@ the value is already in the environment and nothing here parses anything.
 The file is read only as the fallback, which is what makes ``uv run
 fm-robot-agent`` on a robot land on the same router the unit would use instead of
 failing for a reason the operator has to go looking for.
+
+On an operator machine the fallback is the whole path rather than a safety net:
+a Mac runs the client without a unit, so the file — or an exported
+``FM_ROUTER_ENDPOINT`` — is the only thing that says where the router is.
 """
 
 from __future__ import annotations
