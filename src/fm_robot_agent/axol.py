@@ -187,6 +187,7 @@ class AxolAdapter:
             # reports a robot as teleoperating while its motors sit disconnected.
             "mode": self._fleet_mode(session.get("command")) if running else None,
             "modes": sorted(MODES),
+            "mode_arguments": {POLICY_MODE: list(RUN_POLICY_REQUIRED)},
             "hardware": robot.get("state", "unknown"),
             "recording": running and session.get("command") == RECORD_OPERATION,
             "services": [{"name": "almond-axol", "state": robot.get("state", "unknown")}],

@@ -100,7 +100,11 @@ def build_payload(verb: str, args: argparse.Namespace) -> dict | None:
         if action != "set":
             return {"action": action}
         key, _, value = (args.assignment or "").partition("=")
-        return {"action": "set", "key": key, "value": value}
+        body = {"action": "set", "key": key, "value": value}
+        if getattr(args, "expected_revision", None) is not None:
+            body["action"] = "set_if_revision"
+            body["expected_revision"] = args.expected_revision
+        return body
     if verb == "record":
         body = {"dataset": args.dataset, "action": args.value or "start"}
         if args.task:
@@ -142,13 +146,18 @@ def query(
         sample = reply.ok if reply.ok is not None else reply.err
         if sample is None:
             continue
+        reply_key = str(getattr(sample, "key_expr", key))
         try:
             reply_body = json.loads(bytes(sample.payload))
         except (json.JSONDecodeError, UnicodeDecodeError):
-            reply_body = {"ok": False, "error": "reply was not JSON", "key": str(sample.key_expr)}
+            reply_body = {"ok": False, "error": "reply was not JSON", "key": reply_key}
+        if not isinstance(reply_body, dict):
+            reply_body = {"ok": False, "error": "reply was not a JSON object"}
+        if "*" not in key and reply_key != key:
+            reply_body = {"ok": False, "error": "reply names another robot or operation"}
         # A `list` reply is otherwise anonymous: the payload names no robot, so
         # the caller sees how many answered and never which ones.
-        device = device_of(sample.key_expr)
+        device = device_of(reply_key)
         replies.append({**reply_body, "device": device} if device else reply_body)
     del zenoh
     return replies
@@ -199,6 +208,7 @@ def main(argv: list[str] | None = None) -> int:
         help=f"mode: the config; record: start | stop; config: {' | '.join(CONFIG_ACTIONS)}",
     )
     parser.add_argument("assignment", nargs="?", help="config set: KEY=VALUE")
+    parser.add_argument("--expected-revision", help="config set: exact setting revision from config get --json")
     parser.add_argument(
         "--arg",
         action="append",
@@ -231,6 +241,11 @@ def main(argv: list[str] | None = None) -> int:
             parser.error("config set takes KEY=VALUE")
     if not listing and args.verb in ("record", "episodes") and not args.dataset:
         parser.error(f"{args.verb} needs --dataset")
+    if args.expected_revision is not None:
+        if listing or args.verb != "config" or args.value != "set":
+            parser.error("--expected-revision requires config set")
+        if not re.fullmatch(r"[a-f0-9]{64}", args.expected_revision):
+            parser.error("--expected-revision must be a lowercase SHA-256 digest")
 
     try:
         session = open_session()
@@ -246,6 +261,17 @@ def main(argv: list[str] | None = None) -> int:
 
         verb = wire_verb(args.verb)
         key = f"{KEY_PREFIX}/{namespace_of(args.device)}/{verb}"
+        if args.expected_revision is not None:
+            snapshots = query(session, key, {"action": "get"}, "", timeout_s=CONFIG_TIMEOUT_S)
+            setting_key = args.assignment.partition("=")[0]
+            snapshot = snapshots[0] if len(snapshots) == 1 else {}
+            settings = snapshot.get("config")
+            if snapshot.get("ok") is not True or not isinstance(settings, list) or not any(
+                row.get("key") == setting_key and row.get("revision") == args.expected_revision
+                for row in settings if isinstance(row, dict)
+            ):
+                print("fm robot: setting changed or agent lacks guarded writes; read config again", file=sys.stderr)
+                return EX_PRECONDITION
         parameters = f"dataset={args.dataset}" if verb in READ_VERBS and args.dataset else ""
         replies = query(
             session,
@@ -257,6 +283,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if not replies:
         print(f"fm robot: {args.device} did not answer", file=sys.stderr)
+        return EX_PRECONDITION
+    if len(replies) != 1:
+        print("fm robot: multiple replies for one robot; outcome is unknown", file=sys.stderr)
         return EX_PRECONDITION
     render(replies, args.as_json)
     return 0 if all(reply.get("ok", True) for reply in replies) else 1

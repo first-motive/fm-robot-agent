@@ -25,6 +25,7 @@ open window and finishes the rollback it inherited.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from dataclasses import dataclass, field
@@ -84,7 +85,7 @@ class Setting:
 
     def as_dict(self) -> dict:
         """The wire shape. ``class`` is a keyword in Python and not on the wire."""
-        return {
+        result = {
             "key": self.key,
             "value": self.value,
             "class": self.klass,
@@ -92,6 +93,10 @@ class Setting:
             "options": list(self.options),
             "help": self.help,
         }
+        result["revision"] = hashlib.sha256(
+            json.dumps(result, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+        return result
 
 
 @dataclass

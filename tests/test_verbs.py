@@ -146,6 +146,20 @@ def test_config_set_writes_a_tuning_key_through(robot):
     assert robot.config["CYCLONEDDS_VERBOSITY"] == "fine"
 
 
+def test_config_set_refuses_a_changed_setting_without_overwriting_it(robot):
+    setting = next(row for row in config(robot, action="get")["config"] if row["key"] == "CYCLONEDDS_VERBOSITY")
+    assert config(robot, action="set_if_revision", key=setting["key"], value="fine", expected_revision=setting["revision"])["ok"]
+    refused = config(robot, action="set_if_revision", key=setting["key"], value="severe", expected_revision=setting["revision"])
+    assert refused["ok"] is False
+    assert "changed" in refused["error"]
+    assert robot.config[setting["key"]] == "fine"
+
+
+@pytest.mark.parametrize("revision", [None, 1, "bad", "x" * 10000])
+def test_config_set_refuses_invalid_revision(robot, revision):
+    assert not config(robot, action="set_if_revision", key="CYCLONEDDS_VERBOSITY", value="fine", expected_revision=revision)["ok"]
+
+
 def test_a_motion_key_is_refused_while_the_robot_is_busy(robot):
     ask(robot, "up")
     assert config(robot, action="set", key="TELEOP_POSITION_SCALE", value="1.5")["ok"] is False

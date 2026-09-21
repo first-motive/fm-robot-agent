@@ -162,7 +162,7 @@ def _config(key: str, adapter: RobotAdapter, body: dict) -> Reply:
     a short string.
     """
     action = body.get("action") or ""
-    if action not in CONFIG_ACTIONS:
+    if action not in (*CONFIG_ACTIONS, "set_if_revision"):
         return _refuse(key, f"action must be one of {CONFIG_ACTIONS}")
 
     if action == "get":
@@ -184,6 +184,13 @@ def _config(key: str, adapter: RobotAdapter, body: dict) -> Reply:
         return _refuse(key, "set needs a value")
     if len(value) > MAX_VALUE_LEN:
         return _refuse(key, f"value is longer than {MAX_VALUE_LEN} characters")
+    if action == "set_if_revision" or "expected_revision" in body:
+        expected = body.get("expected_revision")
+        if not isinstance(expected, str) or not re.fullmatch(r"[a-f0-9]{64}", expected):
+            return _refuse(key, "expected_revision must be a SHA-256 digest")
+        setting = next((row for row in adapter.config_read() if row.key == config_key), None)
+        if setting is None or setting.as_dict()["revision"] != expected:
+            return _refuse(key, "configuration changed; read it again before confirming")
     return _outcome(key, adapter.config_write(config_key, value))
 
 

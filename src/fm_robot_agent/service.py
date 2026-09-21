@@ -27,8 +27,8 @@ from fm_robot_agent.axol import AxolAdapter
 from fm_robot_agent.card import CardError, RobotCard, read_card
 from fm_robot_agent.env import EndpointError, router_endpoint
 from fm_robot_agent.fake import FakeAdapter
-from fm_robot_agent.protocol import AdapterError, RobotAdapter
-from fm_robot_agent.verbs import KEY_PREFIX, answer
+from fm_robot_agent.protocol import SCHEMA_VERSION, AdapterError, RobotAdapter
+from fm_robot_agent.verbs import KEY_PREFIX, READ_VERBS, Reply, answer, verb_of
 
 #: The topic the fleet watches a robot through, and therefore the one a severing
 #: config change is verified against. The Anvil's crosses through
@@ -62,20 +62,33 @@ def _session_config(endpoint: str):
     return config
 
 
+def dispatch_query(adapter, namespace, command_lock, key, *, parameters="", payload=None):
+    """Keep vendor stop and reads available; refuse other competing writes."""
+    if verb_of(key, namespace) in (*READ_VERBS, "stop"):
+        return answer(key, adapter, namespace, parameters=parameters, payload=payload)
+    if not command_lock.acquire(blocking=False):
+        return Reply(key, json.dumps({
+            "schema_version": SCHEMA_VERSION, "ok": False,
+            "error": "robot command in progress; this request was not executed",
+        }).encode(), ok=False)
+    try:
+        return answer(key, adapter, namespace, parameters=parameters, payload=payload)
+    finally:
+        command_lock.release()
+
+
 def _handler(adapter: RobotAdapter, namespace: str):
     """Build the queryable callback. Closes over config so Zenoh needs none of it."""
 
+    command_lock = threading.Lock()
     # query is a zenoh.Query; the type is not imported at module scope on purpose.
     def handle(query) -> None:
         import zenoh
 
         payload = bytes(query.payload) if query.payload is not None else None
-        reply = answer(
-            str(query.key_expr),
-            adapter,
-            namespace,
-            parameters=str(query.parameters or ""),
-            payload=payload,
+        reply = dispatch_query(
+            adapter, namespace, command_lock, str(query.key_expr),
+            parameters=str(query.parameters or ""), payload=payload,
         )
         encoding = zenoh.Encoding(reply.encoding)
         if reply.ok:

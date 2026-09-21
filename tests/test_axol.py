@@ -124,6 +124,7 @@ def test_status_reports_the_contract_fields(adapter):
     assert reported["hardware"] == "connected"
     assert reported["mode"] is None
     assert reported["recording"] is False
+    assert reported["mode_arguments"] == {"policy": ["policy_path", "policy_type", "task"]}
 
 
 def test_status_names_the_running_mode_in_fleet_terms(adapter, server):

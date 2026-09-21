@@ -6,9 +6,12 @@ the severing guard's whole meaning rests on what it counts as telemetry.
 
 from __future__ import annotations
 
+import json
+import threading
 import time
 
-from fm_robot_agent.service import FabricWatch
+from fm_robot_agent.fake import FakeAdapter
+from fm_robot_agent.service import FabricWatch, dispatch_query
 
 
 def test_a_watch_that_has_seen_nothing_answers_no():
@@ -39,3 +42,20 @@ def test_the_payload_is_never_decoded():
     watch = FabricWatch()
     watch.sample(None)
     assert watch.last_seen > 0
+
+
+def test_busy_command_keeps_stop_and_status_available_but_refuses_other_writes():
+    robot = FakeAdapter()
+    lock = threading.Lock()
+    lock.acquire()
+    try:
+        stop = dispatch_query(robot, "fm_rob_01", lock, "fm/robot/fm_rob_01/stop")
+        assert stop.ok is True
+        refused = dispatch_query(robot, "fm_rob_01", lock, "fm/robot/fm_rob_01/up")
+        assert refused.ok is False
+        assert "not executed" in json.loads(refused.payload)["error"]
+        status = dispatch_query(robot, "fm_rob_01", lock, "fm/robot/fm_rob_01/status")
+        assert status.ok is True
+    finally:
+        lock.release()
+    assert dispatch_query(robot, "fm_rob_01", lock, "fm/robot/fm_rob_01/stop").ok

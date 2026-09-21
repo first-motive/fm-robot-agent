@@ -3,7 +3,27 @@
   "commands": {
     "robot": {
       "script": "scripts/run/robot.sh",
-      "help": "drive a robot over the fleet fabric: status | up | down | config | record | stop | episodes"
+      "help": "drive a robot over the fleet fabric: status | up | down | mode | config | record | stop | episodes",
+      "operations": {
+        "robot.mode": {
+          "owner": "fm-robot-agent",
+          "target": "robot",
+          "inputs": {"value": "mode from robot status", "args": "operation-specific string values"},
+          "effect": "write",
+          "confirmation": "human mode selection",
+          "result": "schema_version 1 RobotAck",
+          "availability": "selected agent must support the mode verb; local discovery is not capability proof"
+        },
+        "robot.record.start": {
+          "owner": "fm-robot-agent",
+          "target": "robot",
+          "inputs": {"dataset": "dataset name", "task": "recording instruction"},
+          "effect": "write",
+          "confirmation": "operator starts recording",
+          "result": "schema_version 1 RobotRecordAck",
+          "availability": "selected recorder must support task text or refuse it"
+        }
+      }
     }
   }
 }

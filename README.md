@@ -36,6 +36,21 @@ An unclassified key is never written because `.env.config` is an `env_file` for 
 container that runs `privileged: true`: writing an unknown key there is
 environment injection, not a configuration edit.
 
+Each reported setting includes a `revision` digest of its current value and
+metadata. A human can copy it from `config get --json` and use
+`config set KEY=VALUE --expected-revision SHA`. This sends the distinct
+`set_if_revision` action, which older agents refuse. The agent checks the
+revision before it calls the adapter and retains all existing class guards.
+This check covers changes observed by the agent. It is not an atomic transaction
+with an independent vendor UI or a direct file writer.
+
+Agent-mediated mutations are serialized without a waiting queue: a conflicting
+request is refused as not executed. Reads and the vendor stop path remain
+available during work. Stop does not cancel the other command: a pending mode
+start or vendor restart can still complete afterwards. Check status again when
+it completes. Preventing that continuation requires adapter-specific
+cancellation and live proof; the agent does not claim that capability.
+
 ## Install
 
 On the robot's own host, once its identity card and fm-comms are in place:

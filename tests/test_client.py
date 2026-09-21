@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from types import SimpleNamespace
 
 import pytest
 
@@ -16,6 +17,22 @@ def args(**overrides) -> argparse.Namespace:
 
 def test_a_device_name_derives_the_namespace():
     assert client.namespace_of("fm-rob-01") == "fm_rob_01"
+
+
+def test_query_refuses_another_robots_reply():
+    sample = SimpleNamespace(payload=b'{"ok":true}', key_expr="fm/robot/fm_rob_02/status")
+    session = SimpleNamespace(get=lambda *a, **kw: [SimpleNamespace(ok=sample, err=None)])
+    result = client.query(session, "fm/robot/fm_rob_01/status")
+    assert result[0]["ok"] is False
+    assert "another robot" in result[0]["error"]
+
+
+def test_query_preserves_keyless_error_replies():
+    sample = SimpleNamespace(payload=b'{"ok":false,"error":"busy"}')
+    session = SimpleNamespace(get=lambda *a, **kw: [SimpleNamespace(ok=None, err=sample)])
+    result = client.query(session, "fm/robot/fm_rob_01/config")
+    assert result[0]["error"] == "busy"
+    assert result[0]["device"] == "fm-rob-01"
 
 
 @pytest.mark.parametrize("verb", ["status", "up", "down", "stop", "episodes"])
@@ -166,6 +183,13 @@ def test_config_set_splits_the_assignment():
         "key": "ROS_DOMAIN_ID",
         "value": "7",
     }
+
+
+def test_config_set_preserves_the_expected_revision():
+    revision = "a" * 64
+    payload = client.build_payload("config", args(value="set", assignment="KEY=new", expected_revision=revision))
+    assert payload["expected_revision"] == revision
+    assert payload["action"] == "set_if_revision"
 
 
 def test_config_rollback_carries_nothing_else():
