@@ -45,6 +45,8 @@ class FakeAdapter:
         self.mode = MODES[0]
         self.running = False
         self.recording: str | None = None
+        self.recording_episode: str | None = None
+        self.pinned: str | None = None
         self._episodes: dict[str, list[dict]] = {}
         self.config = {
             "ARMS_CONTROL_CONFIG_FILE": MODES[0],
@@ -64,7 +66,22 @@ class FakeAdapter:
             "recording": self.recording,
             "services": [{"name": "fake", "state": "running" if self.running else "exited"}],
             "disk": {"total_kb": 0, "available_kb": 0},
+            "capture": {
+                "session_default": {"slug": self.pinned} if self.pinned else None,
+                "active_episode": {"id": self.recording_episode} if self.recording_episode else None,
+                "quest": None,
+            },
         }
+
+    def session(self, action: str, dataset: str = "") -> Outcome:
+        if action != "get" and self.recording is not None:
+            return Outcome(ok=False, message="recording; stop it before changing the pin")
+        if action == "set":
+            self.pinned = dataset
+        elif action == "clear":
+            self.pinned = None
+        return Outcome(ok=True, message="pinned session",
+                       detail={"session": {"slug": self.pinned} if self.pinned else None})
 
     def up(self) -> Outcome:
         self.running = True
@@ -109,12 +126,14 @@ class FakeAdapter:
         self.pending = None
         return Outcome(ok=True, message=f"{key} restored", detail={"key": key})
 
-    def record(self, dataset: str, action: str, task: str = "") -> Outcome:
+    def record(self, dataset: str, action: str, task: str = "", note: str = "", episode: str = "") -> Outcome:
         # The same refusal both real adapters make, so a caller that exercises
         # the fake sees the answer the hardware would give rather than a
         # capability only the double has.
         if task:
             return task_not_recorded("the fake recorder")
+        if action == "stop" and episode and episode != self.recording_episode:
+            return Outcome(ok=False, message=f"stale stop: episode {self.recording_episode} is recording")
         if action == "start":
             if self.recording is not None:
                 return Outcome(ok=False, message=f"already recording into {self.recording}")
@@ -122,10 +141,11 @@ class FakeAdapter:
             slug = f"{len(episodes):04d}"
             episodes.append({"slug": slug, "size_kb": 0})
             self.recording = dataset
+            self.recording_episode = slug
             return Outcome(ok=True, message="recording", detail={"episode": slug})
         if self.recording is None:
             return Outcome(ok=False, message="not recording")
-        self.recording = None
+        self.recording = self.recording_episode = None
         return Outcome(ok=True, message="stopped")
 
     def stop(self) -> Outcome:

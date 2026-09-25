@@ -36,7 +36,7 @@ def ask(robot, verb, *, parameters="", payload=None):
 
 
 @pytest.mark.parametrize(
-    "verb", ["status", "up", "down", "config", "record", "stop", "episodes"]
+    "verb", ["status", "up", "down", "config", "record", "stop", "episodes", "session"]
 )
 def test_every_contract_verb_routes(verb):
     assert verb_of(key(verb), NS) == verb
@@ -306,3 +306,23 @@ def test_a_wildcard_still_reads(verb):
 @pytest.mark.parametrize("verb", ["up", "down", "config", "record", "stop"])
 def test_a_named_query_still_commands(verb):
     assert verb_of(key(verb), NS) == verb
+
+
+# --- capture session and stop guards ------------------------------------------
+
+
+def test_session_pin_routes_and_is_refused_during_a_take(robot):
+    assert body(ask(robot, "session", payload={"action": "set", "dataset": "can-pick"}))["session"] == {
+        "slug": "can-pick"}
+    assert body(ask(robot, "status"))["capture"]["session_default"] == {"slug": "can-pick"}
+    ask(robot, "record", payload={"dataset": "can-pick", "action": "start"})
+    refused = ask(robot, "session", payload={"action": "clear"})
+    assert refused.ok is True and body(refused)["ok"] is False
+    assert ask(robot, "session", payload={"action": "pin"}).ok is False
+    assert ask(robot, "session", payload={"action": "set", "dataset": "../etc"}).ok is False
+
+
+def test_record_refuses_a_note_on_start_and_a_malformed_episode(robot):
+    assert ask(robot, "record", payload={"dataset": "can-pick", "action": "start", "note": "x"}).ok is False
+    assert ask(robot, "record", payload={"dataset": "can-pick", "action": "stop", "episode": "41; rm"}).ok is False
+    assert ask(robot, "record", payload={"dataset": "can-pick", "action": "stop", "note": "n" * 501}).ok is False

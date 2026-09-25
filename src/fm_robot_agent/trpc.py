@@ -47,8 +47,13 @@ class TrpcClient:
         self.url = url
         self.timeout_s = timeout_s
 
-    def _exchange(self, request: dict, *, subscription: bool) -> Any:
+    def _exchange(self, request: dict, *, subscription: bool, idle_s: float | None = None) -> Any:
         """Send one request, return the first data payload, close.
+
+        ``idle_s`` is for a subscription that emits nothing while its value is
+        unset — the webapp's pinned session is the case. Once the server has
+        confirmed the subscription, that much silence means "no value" and
+        returns ``None`` instead of an error.
 
         Imported here rather than at module scope so the module loads on a host
         where the wheel is missing and the failure names the real problem.
@@ -61,13 +66,22 @@ class TrpcClient:
         try:
             with connect(self.url, open_timeout=self.timeout_s) as socket:
                 socket.send(json.dumps(request, sort_keys=True))
+                started = False
                 while True:
-                    message = json.loads(socket.recv(timeout=self.timeout_s))
+                    try:
+                        raw = socket.recv(timeout=idle_s if started and idle_s else self.timeout_s)
+                    except TimeoutError:
+                        if started and idle_s:
+                            socket.send(json.dumps({"id": request["id"], "method": "subscription.stop"}))
+                            return None
+                        raise
+                    message = json.loads(raw)
                     if "error" in message:
                         raise AdapterError(message["error"].get("message", "tRPC error"))
                     result = message.get("result") or {}
                     kind = result.get("type")
                     if kind == "started":
+                        started = True
                         continue
                     if kind in ("data", None):
                         if subscription:
@@ -85,9 +99,15 @@ class TrpcClient:
             params["input"] = payload
         return self._exchange({"id": 1, "method": method, "params": params}, subscription=False)
 
-    def first_event(self, path: str, payload: dict | None = None) -> Any:
-        """Start a subscription, take its first data event, stop it."""
+    def first_event(self, path: str, payload: dict | None = None, idle_s: float | None = None) -> Any:
+        """Start a subscription, take its first data event, stop it.
+
+        With ``idle_s``, a subscription that stays silent that long after it
+        started returns ``None``: the server has nothing to report yet.
+        """
         params: dict[str, Any] = {"path": path}
         if payload is not None:
             params["input"] = payload
-        return self._exchange({"id": 1, "method": "subscription", "params": params}, subscription=True)
+        return self._exchange(
+            {"id": 1, "method": "subscription", "params": params}, subscription=True, idle_s=idle_s
+        )

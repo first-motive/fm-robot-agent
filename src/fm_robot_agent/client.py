@@ -11,6 +11,9 @@ and the reply into either a line a person reads or the JSON a script does.
     fm robot fm-rob-01 config rollback
     fm robot fm-rob-01 record start --dataset grocery-sort-v1
     fm robot fm-rob-02 record start --dataset checkers-bag-v1 --task "put the nuts in the bag"
+    fm robot fm-rob-01 record stop --dataset grocery-sort-v1 --episode 41 --note "dropped once"
+    fm robot fm-rob-01 session set --dataset grocery-sort-v1
+    fm robot fm-rob-01 session get
     fm robot list
 
 ``list`` is a wildcard query over ``fm/robot/*/status``: the fabric is the
@@ -30,7 +33,13 @@ import re
 import sys
 
 from fm_robot_agent.env import EndpointError, router_endpoint
-from fm_robot_agent.verbs import CONFIG_ACTIONS, KEY_PREFIX, READ_VERBS, VERBS
+from fm_robot_agent.verbs import (
+    CONFIG_ACTIONS,
+    KEY_PREFIX,
+    READ_VERBS,
+    SESSION_ACTIONS,
+    VERBS,
+)
 
 #: A query waits this long for a robot to answer. Compose operations detach and
 #: report through `status`, so no verb should ever need longer.
@@ -103,8 +112,14 @@ def build_payload(verb: str, args: argparse.Namespace) -> dict | None:
         return {"action": "set", "key": key, "value": value}
     if verb == "record":
         body = {"dataset": args.dataset, "action": args.value or "start"}
-        if args.task:
-            body["task"] = args.task
+        for name in ("task", "note", "episode"):
+            if getattr(args, name, ""):
+                body[name] = getattr(args, name)
+        return body
+    if verb == "session":
+        body = {"action": args.value or "get"}
+        if args.dataset:
+            body["dataset"] = args.dataset
         return body
     return None
 
@@ -196,7 +211,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "value",
         nargs="?",
-        help=f"mode: the config; record: start | stop; config: {' | '.join(CONFIG_ACTIONS)}",
+        help=f"mode: the config; record: start | stop; config: {' | '.join(CONFIG_ACTIONS)}; "
+        f"session: {' | '.join(SESSION_ACTIONS)}",
     )
     parser.add_argument("assignment", nargs="?", help="config set: KEY=VALUE")
     parser.add_argument(
@@ -212,6 +228,10 @@ def main(argv: list[str] | None = None) -> int:
         default="",
         help="record: the instruction the episode demonstrates, written into the dataset "
         "(refused by a robot whose recorder has no field for one)",
+    )
+    parser.add_argument("--note", default="", help="record stop: a short note for the recorder")
+    parser.add_argument(
+        "--episode", default="", help="record stop: the episode ID you mean to stop; another take refuses"
     )
     parser.add_argument("--json", action="store_true", dest="as_json", help="print the raw reply")
     args = parser.parse_args(argv)
@@ -231,6 +251,11 @@ def main(argv: list[str] | None = None) -> int:
             parser.error("config set takes KEY=VALUE")
     if not listing and args.verb in ("record", "episodes") and not args.dataset:
         parser.error(f"{args.verb} needs --dataset")
+    if not listing and args.verb == "session":
+        if (args.value or "get") not in SESSION_ACTIONS:
+            parser.error(f"session takes one of: {', '.join(SESSION_ACTIONS)}")
+        if args.value == "set" and not args.dataset:
+            parser.error("session set needs --dataset")
 
     try:
         session = open_session()

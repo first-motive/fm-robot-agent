@@ -123,8 +123,20 @@ class RobotAdapter(Protocol):
         verification the agent did not survive is still undone.
         """
 
-    def record(self, dataset: str, action: str, task: str = "") -> Outcome:
+    def session(self, action: str, dataset: str = "") -> Outcome:
+        """Read (``get``), pin (``set``), or clear the recorder's shared session.
+
+        The pin is what a headset records into. ``detail["session"]`` carries
+        the pin as read back after the change, or ``None``. A change during a
+        take is refused. A robot with no shared session refuses every action.
+        """
+
+    def record(self, dataset: str, action: str, task: str = "", note: str = "", episode: str = "") -> Outcome:
         """Start or stop recording an episode into ``dataset``.
+
+        ``note`` is a short stop note for the recorder; the full take intent
+        lives in tools records. ``episode`` names the take a stop means to end,
+        so a stop that would end a different take is refused.
 
         ``action`` is ``start`` or ``stop``; the router validates that before
         calling. A started episode is returned in ``detail["episode"]``.

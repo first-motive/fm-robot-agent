@@ -362,7 +362,11 @@ class AxolAdapter:
             )
         return None
 
-    def record(self, dataset: str, action: str, task: str = "") -> Outcome:
+    def session(self, action: str, dataset: str = "") -> Outcome:
+        """The Axol records by operation, with no shared session a headset could pin."""
+        return Outcome(ok=False, message="the Axol has no shared recording session to pin")
+
+    def record(self, dataset: str, action: str, task: str = "", note: str = "", episode: str = "") -> Outcome:
         """Start or stop `collect-data`, which takes a dataset and nothing else.
 
         Almond's `run-policy` names its task field in its own error message —
@@ -375,6 +379,8 @@ class AxolAdapter:
         """
         if task:
             return task_not_recorded(f"the Axol's {RECORD_OPERATION}")
+        if note or episode:
+            return Outcome(ok=False, message=f"the Axol's {RECORD_OPERATION} takes no stop note or episode check")
         if action == "start":
             started = self._post(
                 "/api/op/start",

@@ -29,24 +29,52 @@ COMPOSE_PS = json.dumps({"Service": "ros2", "State": "running", "Status": "Up 2 
 
 
 class WebappStub:
-    """The webapp's tRPC surface, recording what it was asked."""
+    """The webapp's tRPC surface, recording what it was asked.
+
+    It keeps the pin and the active take the way the 1.2.13 server does: the
+    pinned-session subscription is silent while nothing is pinned, and a pin set
+    or a Start from any origin shows up in the next read.
+    """
 
     def __init__(self) -> None:
-        self.sessions = [{"id": 7, "slug": "grocery-sort-v1", "topics": []}]
+        self.sessions = [{"id": 7, "name": "grocery-sort-v1", "slug": "grocery-sort-v1", "topics": []}]
         self.calls: list[tuple] = []
+        self.pinned: dict | None = None
+        self.recording: int | None = None
+        self.ignore_pin = False
 
-    def first_event(self, path, payload=None):
+    def first_event(self, path, payload=None, idle_s=None):
         self.calls.append(("subscription", path, payload))
+        if path == "session.default.subscribe":
+            return {"data": self.pinned, "error": False} if self.pinned else None
+        if path == "recording.status":
+            if self.recording is None:
+                return {"data": {"isRecording": False}, "error": False}
+            episode = {"id": self.recording, "createdAt": 1, "session": {"name": "grocery-sort-v1"}}
+            return {"data": {"isRecording": True, "episode": episode}, "error": False}
+        if path == "quest.healthChecks":
+            return {"data": {"checks": [{"id": "adb_connected", "status": "success"}]}, "error": False}
         return {"sessions": self.sessions}
 
     def call(self, method, path, payload=None):
         self.calls.append((method, path, payload))
+        if path == "session.default.set":
+            if not self.ignore_pin:
+                self.pinned = next(
+                    {k: row[k] for k in ("id", "name", "slug")} for row in self.sessions if row["id"] == payload["id"]
+                )
+            return None
+        if path == "session.default.clear":
+            self.pinned = None
+            return None
         if path == "recording.start":
+            self.recording = 42
             return {"episodeId": 42}
         if path == "recording.stop":
+            self.recording = None
             return {"id": 42}
         if path == "recording.sessions.create":
-            created = {"id": 8, "slug": payload["slug"], "topics": payload["topics"]}
+            created = {"id": 8, "name": payload["name"], "slug": payload["slug"], "topics": payload["topics"]}
             self.sessions.append(created)
             return created
         return {}
@@ -675,3 +703,69 @@ def test_openarm_modes_take_no_arguments(adapter):
 
     assert outcome.ok is False
     assert "no arguments" in outcome.message
+
+
+# --- shared capture state ------------------------------------------------------
+
+
+def test_status_reports_the_shared_capture_state_from_the_webapp(adapter):
+    capture = adapter.status()["capture"]
+    assert capture["session_default"] is None and capture["active_episode"] is None
+    assert capture["quest"]["data"]["checks"][0]["id"] == "adb_connected"
+    adapter.webapp.recording = 51  # a take started from the headset, not from here
+    assert adapter.status()["capture"]["active_episode"]["id"] == 51
+
+
+def test_session_pin_is_read_back_and_refused_during_a_take(adapter):
+    pinned = adapter.session("set", "grocery-sort-v1")
+    assert (pinned.ok, pinned.detail["session"]["id"]) == (True, 7)
+    assert ("mutation", "session.default.set", {"id": 7}) in adapter.webapp.calls
+    adapter.webapp.recording = 51
+    refused = adapter.session("clear")
+    assert refused.ok is False and "51 is recording" in refused.message
+    adapter.webapp.recording = None
+    assert adapter.session("clear").detail["session"] is None
+    adapter.webapp.ignore_pin = True
+    unconfirmed = adapter.session("set", "grocery-sort-v1")
+    assert (unconfirmed.ok, unconfirmed.message) == (False, "the webapp did not confirm the pin")
+
+
+def test_record_stop_refuses_a_stale_episode_and_forwards_a_note(adapter):
+    started = adapter.record("grocery-sort-v1", "start")
+    assert (started.detail["episode"], started.detail["session_id"]) == ("42", 7)
+    stale = adapter.record("grocery-sort-v1", "stop", episode="41")
+    assert stale.ok is False and "stale stop: episode 42" in stale.message
+    assert not any(call[1] == "recording.stop" for call in adapter.webapp.calls)
+    assert adapter.record("grocery-sort-v1", "stop", note="dropped once", episode="42").ok is True
+    assert ("mutation", "recording.stop", {"note": "dropped once"}) in adapter.webapp.calls
+
+
+def test_first_event_reads_silence_after_start_as_no_value():
+    """The pinned-session subscription says nothing while no session is pinned."""
+    import json
+    import threading
+
+    from websockets.sync.server import serve
+
+    from fm_robot_agent.trpc import TrpcClient
+
+    def silent(socket):
+        request = json.loads(socket.recv())
+        socket.send(json.dumps({"id": request["id"], "result": {"type": "started"}}))
+        try:
+            socket.recv(timeout=2)  # the client's subscription.stop
+        except TimeoutError:
+            pass
+
+    with serve(silent, "127.0.0.1", 0) as server:
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        port = server.socket.getsockname()[1]
+        client = TrpcClient(f"ws://127.0.0.1:{port}", timeout_s=2)
+        assert client.first_event("session.default.subscribe", idle_s=0.2) is None
+        try:
+            client.first_event("session.default.subscribe")
+        except AdapterError as exc:
+            assert "did not answer" in str(exc)
+        else:
+            raise AssertionError("without idle_s, silence is a fault")
+        server.shutdown()
