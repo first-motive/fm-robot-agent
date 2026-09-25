@@ -14,6 +14,8 @@ episode queryable uses, for the same reason: the suite runs with no router.
                                         "task": "..."}
     fm/robot/<ns>/stop        write   halt motion, vendor mechanism
     fm/robot/<ns>/episodes    read    ?dataset=<slug>
+    fm/robot/<ns>/session     write   {"action": "get"|"set"|"clear", "dataset": "..."}
+                                      the recorder's shared pin, which a headset records into
 
 Read and write verbs are both queries. Zenoh's put/subscribe pair delivers no
 reply, and every verb here has an answer the caller must see — a refused mode, a
@@ -36,10 +38,20 @@ from fm_robot_agent.protocol import SCHEMA_VERSION, AdapterError, Outcome, Robot
 KEY_PREFIX = "fm/robot"
 
 READ_VERBS = ("status", "episodes")
-WRITE_VERBS = ("up", "down", "config", "mode", "record", "stop")
+WRITE_VERBS = ("up", "down", "config", "mode", "record", "stop", "session")
 VERBS = READ_VERBS + WRITE_VERBS
 
 RECORD_ACTIONS = ("start", "stop")
+
+#: What `session` can be asked to do. `get` sits with the writes for the same
+#: reason config's does: a discovery wildcard has no business reading it.
+SESSION_ACTIONS = ("get", "set", "clear")
+
+#: Ceiling on a stop note. The full take intent lives in tools records.
+MAX_NOTE_LEN = 500
+
+#: The recorder's numeric episode ID, as text on the wire.
+EPISODE_PATTERN = re.compile(r"^[0-9]{1,12}$")
 
 #: What `config` can be asked to do. `get` reads, and is still a write verb's
 #: neighbour rather than a read one: a wildcard discovery query has no business
@@ -255,6 +267,15 @@ def answer(
         if verb == "mode":
             return _mode(key, adapter, body)
 
+        if verb == "session":
+            action = body.get("action") or "get"
+            dataset = body.get("dataset") or ""
+            if action not in SESSION_ACTIONS:
+                return _refuse(key, f"action must be one of {SESSION_ACTIONS}")
+            if action == "set" and (not isinstance(dataset, str) or not _valid_dataset(dataset)):
+                return _refuse(key, "invalid dataset name")
+            return _outcome(key, adapter.session(action, dataset if action == "set" else ""))
+
         # record
         dataset = body.get("dataset") or ""
         action = body.get("action") or ""
@@ -268,7 +289,15 @@ def answer(
         # robot can record one is the adapter's answer, not the router's.
         if not isinstance(task, str):
             return _refuse(key, "task must be the instruction sentence, as text")
-        return _outcome(key, adapter.record(dataset, action, task))
+        note = body.get("note") or ""
+        episode = body.get("episode") or ""
+        if action == "start" and (note or episode):
+            return _refuse(key, "note and episode belong to a stop")
+        if not isinstance(note, str) or len(note) > MAX_NOTE_LEN:
+            return _refuse(key, f"note must be text of at most {MAX_NOTE_LEN} characters")
+        if not isinstance(episode, str) or (episode and not EPISODE_PATTERN.match(episode)):
+            return _refuse(key, "episode must be the recorder's numeric episode ID")
+        return _outcome(key, adapter.record(dataset, action, task, note, episode))
     except AdapterError as exc:
         # The robot answered with a refusal, or did not answer. Either way the
         # caller gets the reason rather than a timeout it has to guess about.

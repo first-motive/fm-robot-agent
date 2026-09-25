@@ -159,6 +159,17 @@ METADATA_MAX_BYTES = 1 << 20
 #: rclpy client inside a container the agent deliberately runs outside of.
 IS_RECORDING_PATTERN = re.compile(r"is_recording=(True|False)")
 
+#: The webapp's pinned-session subscription emits nothing while no session is
+#: pinned, so this much silence after it starts means "none" rather than a fault.
+PIN_IDLE_S = 0.5
+
+#: The Quest health relay answers from a ROS service call; allow it that long.
+QUEST_IDLE_S = 2.0
+
+#: Ceiling on a stop note forwarded to the vendor. The full take intent stays in
+#: tools records; the recorder only ever gets a short reference.
+MAX_NOTE_LEN = 500
+
 #: What a service call has to set up before `ros2` will answer, and why each is
 #: needed. `docker compose exec` starts a process WITHOUT the image entrypoint,
 #: which is the thing that normally sources ROS — so a bare `ros2` is not even on
@@ -219,7 +230,69 @@ class AnvilAdapter:
             "recording": self._is_recording(),
             "services": self.compose_ps(),
             "disk": self.disk(),
+            "capture": self._capture(),
         }
+
+    def _capture(self) -> dict:
+        """The shared capture state every origin sees: Desktop, CLI, and the headset.
+
+        Each field is ``None`` when the webapp cannot say, so a stopped stack
+        still answers ``status`` rather than failing it.
+        """
+        state: dict = {}
+        for name, read in (("session_default", self._pinned), ("active_episode", self._active_episode),
+                           ("quest", self._quest)):
+            try:
+                state[name] = read()
+            except AdapterError:
+                state[name] = None
+        return state
+
+    def _pinned(self) -> dict | None:
+        """The session the webapp — and through it the headset — will record into."""
+        event = self.webapp.first_event("session.default.subscribe", idle_s=PIN_IDLE_S) or {}
+        data = event.get("data")
+        return {key: data.get(key) for key in ("id", "name", "slug")} if isinstance(data, dict) else None
+
+    def _active_episode(self) -> dict | None:
+        """The take recording now, whoever started it — a Quest A press included."""
+        event = self.webapp.first_event("recording.status") or {}
+        data = event.get("data") or {}
+        if not data.get("isRecording"):
+            return None
+        episode = data.get("episode") or {}
+        return {"id": episode.get("id"), "created_at_ms": episode.get("createdAt"),
+                "session": (episode.get("session") or {}).get("name")}
+
+    def _quest(self) -> object:
+        """The headset's health checks as the webapp relays them from ROS."""
+        return self.webapp.first_event("quest.healthChecks", idle_s=QUEST_IDLE_S)
+
+    def session(self, action: str, dataset: str = "") -> Outcome:
+        """Read, pin, or clear the webapp's shared default session.
+
+        The pin is the webapp's volatile default: the headset records into it,
+        and a Start without a session ID uses it. A change during a take is
+        refused, and every change is read back, because the webapp answers a
+        set with nothing and forgets the pin on restart.
+        """
+        if action == "get":
+            return Outcome(ok=True, message="pinned session", detail={"session": self._pinned()})
+        active = self._active_episode()
+        if active is not None:
+            return Outcome(ok=False, message=f"episode {active['id']} is recording; stop it before changing the pin",
+                           detail={"session": self._pinned()})
+        expected = None
+        if action == "set":
+            expected = self._find_or_create_session(dataset)["id"]
+            self.webapp.call("mutation", "session.default.set", {"id": expected})
+        else:
+            self.webapp.call("mutation", "session.default.clear")
+        pinned = self._pinned()
+        if (pinned or {}).get("id") != expected:
+            return Outcome(ok=False, message="the webapp did not confirm the pin", detail={"session": pinned})
+        return Outcome(ok=True, message=f"pinned {dataset}" if expected else "pin cleared",
+                       detail={"session": pinned})
 
     def up(self) -> Outcome:
         return self._compose_detached("up")
@@ -238,7 +311,7 @@ class AnvilAdapter:
             return Outcome(ok=False, message=f"{self.kind} modes take no arguments")
         return self.config_write(MODE_ALIAS, config)
 
-    def record(self, dataset: str, action: str, task: str = "") -> Outcome:
+    def record(self, dataset: str, action: str, task: str = "", note: str = "", episode: str = "") -> Outcome:
         """Start or stop a webapp recording session, which carries no task text.
 
         The session is created from the workcell's own topic set and a note; the
@@ -255,9 +328,18 @@ class AnvilAdapter:
             return Outcome(
                 ok=True,
                 message=f"recording into {dataset}",
-                detail={"episode": str((episode_id or {}).get("episodeId", ""))},
+                detail={"episode": str((episode_id or {}).get("episodeId", "")), "session_id": session["id"]},
             )
-        stopped = self.webapp.call("mutation", "recording.stop", {"note": "stopped from the fleet"})
+        if len(note) > MAX_NOTE_LEN:
+            return Outcome(ok=False, message=f"a stop note is at most {MAX_NOTE_LEN} characters")
+        if episode:
+            # The webapp's Stop takes no episode, so a caller that names the take it
+            # means to stop is checked here: a headset may have started another.
+            active = self._active_episode()
+            if active is None or str(active["id"]) != episode:
+                running = "nothing" if active is None else f"episode {active['id']}"
+                return Outcome(ok=False, message=f"stale stop: {running} is recording, not episode {episode}")
+        stopped = self.webapp.call("mutation", "recording.stop", {"note": note or "stopped from the fleet"})
         return Outcome(
             ok=True,
             message="recording stopped",
