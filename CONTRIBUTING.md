@@ -38,8 +38,7 @@ docs/contributing-guide
 ## Commit Format
 
 Commits are subject-line-only: `prefix: phrase`. Use a lowercase imperative
-phrase, no trailing period, no body. Add a `Co-Authored-By` trailer only when a
-commit genuinely had more than one author.
+phrase, no trailing period, no body, no trailers.
 
 | Prefix     | Use for                                              | Example                          |
 | ---------- | --------------------------------------------------- | -------------------------------- |
