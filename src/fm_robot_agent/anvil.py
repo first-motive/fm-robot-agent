@@ -185,6 +185,22 @@ RMW = os.environ.get("FM_ANVIL_RMW", "rmw_cyclonedds_cpp")
 SERVICE_TIMEOUT_S = 15
 COMPOSE_TIMEOUT_S = 30
 
+#: The host's own memory accounting. The agent runs outside the containers, so
+#: this is the whole devbox — the number the kernel's OOM killer acts on.
+MEMINFO = Path("/proc/meminfo")
+
+#: /proc/meminfo lines status reports, and the names it reports them under.
+MEMINFO_FIELDS = {
+    "MemTotal": "total_kb",
+    "MemAvailable": "available_kb",
+    "SwapTotal": "swap_total_kb",
+    "SwapFree": "swap_free_kb",
+}
+
+#: Set to keep the vendor replay buffer on, for a debugging session that needs
+#: its "Save Buffer" episode. Read on every tick so it needs no agent restart.
+KEEP_REPLAY_BUFFER = "FM_ANVIL_KEEP_REPLAY_BUFFER"
+
 
 class AnvilAdapter:
     """One Anvil workcell, reached through the loader directory on this host."""
@@ -215,6 +231,7 @@ class AnvilAdapter:
         # fleet one: the fabric reaches the agent, and the agent reaches the
         # webapp, which is what keeps port 3000 off the tailnet.
         self.webapp = TrpcClient(webapp_url or "ws://localhost:3000/trpc")
+        self.meminfo = MEMINFO
 
     # --- the verb set --------------------------------------------------------
 
@@ -230,6 +247,8 @@ class AnvilAdapter:
             "recording": self._is_recording(),
             "services": self.compose_ps(),
             "disk": self.disk(),
+            "memory": self.memory(),
+            "replay_buffer": self._replay_buffer(),
             "capture": self._capture(),
         }
 
@@ -241,7 +260,7 @@ class AnvilAdapter:
         """
         state: dict = {}
         for name, read in (("session_default", self._pinned), ("active_episode", self._active_episode),
-                           ("quest", self._quest)):
+                           ("quest", self._quest), ("quest_metrics", self._quest_metrics)):
             try:
                 state[name] = read()
             except AdapterError:
@@ -265,8 +284,62 @@ class AnvilAdapter:
                 "session": (episode.get("session") or {}).get("name")}
 
     def _quest(self) -> object:
-        """The headset's health checks as the webapp relays them from ROS."""
+        """The headset's health checks as the webapp relays them from ROS.
+
+        The controller-tracking checks in here are start-up tests: on fm-rob-01
+        they stayed failed for a whole session while teleop moved the arms.
+        """
         return self.webapp.first_event("quest.healthChecks", idle_s=QUEST_IDLE_S)
+
+    def _quest_metrics(self) -> object:
+        """The headset's live controller rates, which do move while teleop runs."""
+        return self.webapp.first_event("quest.metrics", idle_s=QUEST_IDLE_S)
+
+    # --- upkeep --------------------------------------------------------------
+
+    def maintain(self) -> str | None:
+        """One tick of upkeep the service runs on a timer; says what it changed.
+
+        Today the only upkeep is the replay buffer. Anvil's Known Issues say it
+        leaks memory while CycloneDDS is in use and advise turning it off then;
+        on fm-rob-01 it grew about 600 MB a minute and the kernel killed it in
+        the middle of a take. The switch is volatile — a stack restart turns the
+        buffer back on — which is why this is a timer and not a one-off.
+
+        A webapp that does not answer is a stack coming back up, not a fault:
+        the next tick tries again.
+        """
+        if not self._holds_replay_buffer_off():
+            return None
+        try:
+            if self._replay_buffer_enabled() is not True:
+                return None
+            self.webapp.call("mutation", "replayBuffer.setEnabled", {"enabled": False})
+        except AdapterError:
+            return None
+        return "replay buffer turned off: it leaks memory while CycloneDDS is in use"
+
+    def _holds_replay_buffer_off(self) -> bool:
+        """Whether this robot's configuration is the one the vendor warns about."""
+        if os.environ.get(KEEP_REPLAY_BUFFER, "").strip():
+            return False
+        enabled = env_values(self._read(self.env_config)).get("ENABLE_CYCLONEDDS", "")
+        return enabled.strip().lower() == "true"
+
+    def _replay_buffer_enabled(self) -> bool | None:
+        event = self.webapp.first_event("replayBuffer.status") or {}
+        enabled = (event.get("data") or {}).get("enabled")
+        return enabled if isinstance(enabled, bool) else None
+
+    def _replay_buffer(self) -> dict | None:
+        """The buffer's state for status, or ``None`` while the webapp is away."""
+        try:
+            enabled = self._replay_buffer_enabled()
+        except AdapterError:
+            return None
+        if enabled is None:
+            return None
+        return {"enabled": enabled, "held_off": self._holds_replay_buffer_off()}
 
     def session(self, action: str, dataset: str = "") -> Outcome:
         """Read, pin, or clear the webapp's shared default session.
@@ -979,6 +1052,17 @@ class AnvilAdapter:
         except OSError:
             return None
         return {"total_kb": usage.total // 1024, "available_kb": usage.free // 1024}
+
+    def memory(self) -> dict | None:
+        """The host's RAM and swap in kB, or ``None`` where the kernel cannot say."""
+        found = {}
+        for line in self._read(self.meminfo).splitlines():
+            name, _, rest = line.partition(":")
+            field = MEMINFO_FIELDS.get(name.strip())
+            number = rest.split()[0] if rest.split() else ""
+            if field and number.isdigit():
+                found[field] = int(number)
+        return found if len(found) == len(MEMINFO_FIELDS) else None
 
 
 def _dir_size_kb(path: Path) -> int:

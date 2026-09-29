@@ -75,9 +75,13 @@ class RobotAdapter(Protocol):
     def status(self) -> dict:
         """Everything the desktop shows without asking a second question.
 
-        Returns the keys the wire contract names: ``mode``, ``hardware``,
-        ``recording``, ``services``, ``disk``. ``kind`` and ``schema_version``
-        are added by the router, not by the adapter.
+        Returns at least the keys the wire contract names: ``mode``,
+        ``hardware``, ``recording``, ``services``, ``disk``, ``memory``.
+        ``memory`` is the host's RAM and swap in kB, or ``None`` where the agent
+        is not on the robot's host. An adapter may add keys its robot has —
+        the Anvil adds ``capture`` and ``replay_buffer`` — and a reader treats a
+        missing one as unknown. ``kind`` and ``schema_version`` are added by the
+        router, not by the adapter.
         """
 
     def up(self) -> Outcome:

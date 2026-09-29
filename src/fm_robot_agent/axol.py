@@ -191,6 +191,8 @@ class AxolAdapter:
             "recording": running and session.get("command") == RECORD_OPERATION,
             "services": [{"name": "almond-axol", "state": robot.get("state", "unknown")}],
             "disk": None,
+            # The agent does not run on the Axol's own host, so its RAM is not ours to read.
+            "memory": None,
             # Forwarded whole, and worth one warning to whoever reads it next:
             # a motor's `status` is not an enable state, and its `voltage` is not
             # a rail reading. On fm-rob-02 both wrists and both grippers report

@@ -66,10 +66,13 @@ class FakeAdapter:
             "recording": self.recording,
             "services": [{"name": "fake", "state": "running" if self.running else "exited"}],
             "disk": {"total_kb": 0, "available_kb": 0},
+            "memory": None,
+            "replay_buffer": None,
             "capture": {
                 "session_default": {"slug": self.pinned} if self.pinned else None,
                 "active_episode": {"id": self.recording_episode} if self.recording_episode else None,
                 "quest": None,
+                "quest_metrics": None,
             },
         }
 
