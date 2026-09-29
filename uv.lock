@@ -49,30 +49,26 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "eclipse-zenoh" },
+    { name = "pyarrow" },
     { name = "websockets", version = "16.1.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "websockets", version = "17.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
 ]
 
 [package.optional-dependencies]
 dev = [
-    { name = "pyarrow" },
     { name = "pytest" },
     { name = "ruff" },
-]
-storage = [
-    { name = "pyarrow" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "eclipse-zenoh", specifier = ">=1.9.0,<1.10" },
-    { name = "pyarrow", marker = "extra == 'dev'", specifier = "==20.0.0" },
-    { name = "pyarrow", marker = "extra == 'storage'", specifier = "==20.0.0" },
+    { name = "pyarrow", specifier = "==20.0.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8" },
     { name = "ruff", marker = "extra == 'dev'" },
     { name = "websockets", specifier = ">=13" },
 ]
-provides-extras = ["dev", "storage"]
+provides-extras = ["dev"]
 
 [[package]]
 name = "iniconfig"

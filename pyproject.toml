@@ -22,6 +22,7 @@ dependencies = [
     # standard library has no WebSocket client. This is the smallest one that
     # offers a synchronous API, which is what the agent needs.
     "websockets>=13",
+    "pyarrow==20.0.0",
 ]
 
 [project.scripts]
@@ -31,8 +32,7 @@ fm-robot = "fm_robot_agent.client:main"
 
 
 [project.optional-dependencies]
-dev = ["pytest>=8", "ruff", "pyarrow==20.0.0"]
-storage = ["pyarrow==20.0.0"]
+dev = ["pytest>=8", "ruff"]
 
 [build-system]
 requires = ["hatchling"]
