@@ -297,6 +297,28 @@ def test_an_absent_dataset_lists_nothing(tmp_path, monkeypatch):
     assert AxolAdapter().episodes("no-such-dataset") == []
 
 
+def test_v3_episodes_use_shared_metadata_and_require_dataset_copy(tmp_path, monkeypatch):
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    monkeypatch.setenv("HF_LEROBOT_HOME", str(tmp_path))
+    root = tmp_path / "axol" / "pick"
+    metadata = root / "meta" / "episodes" / "chunk-000"
+    metadata.mkdir(parents=True)
+    (root / "meta" / "info.json").write_text('{"codebase_version":"v3.0","total_episodes":2}')
+    pq.write_table(pa.Table.from_pylist([
+        {"episode_index": 0, "length": 120, "tasks": ["pick"], "data/file_index": 0},
+        {"episode_index": 1, "length": 90, "tasks": ["place"], "data/file_index": 0},
+    ]), metadata / "file-000.parquet")
+    episodes = AxolAdapter(dataset_owner="axol").episodes("pick")
+    assert [row["slug"] for row in episodes] == ["000000", "000001"]
+    assert all(row["copy_unit"] == "dataset" and row["size_kb"] is None for row in episodes)
+    assert episodes[1]["length"] == 90
+    (root / "meta" / "info.json").write_text('{"codebase_version":"v99.0"}')
+    with pytest.raises(AdapterError, match="unsupported LeRobot"):
+        AxolAdapter(dataset_owner="axol").episodes("pick")
+
+
 # --- telemetry ---------------------------------------------------------------
 
 

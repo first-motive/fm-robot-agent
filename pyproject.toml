@@ -31,7 +31,8 @@ fm-robot = "fm_robot_agent.client:main"
 
 
 [project.optional-dependencies]
-dev = ["pytest>=8", "ruff"]
+dev = ["pytest>=8", "ruff", "pyarrow==20.0.0"]
+storage = ["pyarrow==20.0.0"]
 
 [build-system]
 requires = ["hatchling"]
