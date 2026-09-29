@@ -177,10 +177,17 @@ def test_status_reports_the_contract_fields(adapter):
 
 def test_recording_is_unknown_when_the_stack_is_down(adapter, monkeypatch):
     """A down stack answers no service call; that is not the same as `not recording`."""
+    def stopped_stack(argv, **kw):
+        assert "ps" in argv, "status must not call ROS in a stopped stack"
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
     monkeypatch.setattr(
-        subprocess, "run", lambda argv, **kw: subprocess.CompletedProcess(argv, 1, "", "no service")
+        subprocess, "run", stopped_stack
     )
-    assert adapter.status()["recording"] is None
+    reported = adapter.status()
+    assert reported["hardware"] == "down"
+    assert reported["recording"] is None
+    assert not adapter.webapp.calls, "status must not wait for the stopped webapp"
 
 
 # --- mode --------------------------------------------------------------------
