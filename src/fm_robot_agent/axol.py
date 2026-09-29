@@ -409,6 +409,22 @@ class AxolAdapter:
     def episodes(self, dataset: str) -> list[dict]:
         """Episodes in a LeRobot dataset on this host, from its own index."""
         root = self._dataset_root(dataset)
+        info_path = root / "meta" / "info.json"
+        if root.is_symlink() or (root / "meta").is_symlink() or info_path.is_symlink():
+            raise AdapterError("unsafe dataset metadata path")
+        if info_path.exists():
+            if info_path.stat().st_size > 1024 * 1024:
+                raise AdapterError("dataset metadata exceeds the read limit")
+            try:
+                info = json.loads(info_path.read_text(encoding="utf-8"))
+                version = info.get("codebase_version")
+            except (ValueError, AttributeError) as exc:
+                raise AdapterError("invalid dataset metadata") from exc
+            if version == "v3.0":
+                return self._v3_episodes(root)
+            if version not in {"v2.0", "v2.1"}:
+                raise AdapterError(f"unsupported LeRobot format: {version!r}")
+        # Compatibility for old installations that published only episodes.jsonl.
         index = root / "meta" / "episodes.jsonl"
         try:
             lines = index.read_text(encoding="utf-8").splitlines()
@@ -432,6 +448,38 @@ class AxolAdapter:
                 }
             )
         return found
+
+    def _v3_episodes(self, root: Path) -> list[dict]:
+        try:
+            from pyarrow import parquet
+        except ImportError as exc:
+            raise AdapterError("LeRobot v3 inventory needs the storage extra (pyarrow)") from exc
+        metadata = root / "meta" / "episodes"
+        if metadata.is_symlink():
+            raise AdapterError("unsafe dataset metadata path")
+        found = []
+        seen = set()
+        for path in sorted(metadata.glob("chunk-*/file-*.parquet")):
+            if path.is_symlink() or path.parent.is_symlink() or path.stat().st_size > 64 * 1024 * 1024:
+                raise AdapterError("unsafe or oversized dataset metadata")
+            try:
+                source = parquet.ParquetFile(path)
+                if source.metadata.num_rows + len(found) > 100_000:
+                    raise AdapterError("episode inventory exceeds the read limit")
+                for batch in source.iter_batches(batch_size=1000, columns=["episode_index", "length", "tasks"]):
+                    for row in batch.to_pylist():
+                        index = row.get("episode_index")
+                        if type(index) is not int or index < 0 or index in seen:
+                            raise AdapterError("invalid or duplicate episode identity")
+                        seen.add(index)
+                        found.append({"slug": f"{index:06d}", "length": row.get("length"),
+                                      "tasks": row.get("tasks"), "size_kb": None,
+                                      "format": "lerobot-v3.0", "copy_unit": "dataset"})
+            except (OSError, ValueError) as exc:
+                raise AdapterError("cannot read LeRobot v3 episode metadata") from exc
+        if not found:
+            raise AdapterError("LeRobot v3 episode metadata is unavailable")
+        return sorted(found, key=lambda row: row["slug"])
 
     # --- telemetry -----------------------------------------------------------
 
