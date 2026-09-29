@@ -236,6 +236,8 @@ class AnvilAdapter:
     # --- the verb set --------------------------------------------------------
 
     def status(self) -> dict:
+        services = self.compose_ps()
+        running = any(row["state"] == "running" for row in services)
         return {
             "mode": self.read_mode(),
             "modes": self.list_configs(),
@@ -243,13 +245,17 @@ class AnvilAdapter:
             # service, so it reaches the desktop over `<ns>/hardware_state_
             # controller/state` on the fabric. What the agent can answer for is
             # whether the stack that would publish it is running at all.
-            "hardware": "running" if self._stack_running() else "down",
-            "recording": self._is_recording(),
-            "services": self.compose_ps(),
+            "hardware": "running" if running else "down",
+            # A stopped stack cannot answer ROS or webapp requests. Waiting for
+            # those requests exceeded the caller's Zenoh deadline on every poll.
+            "recording": self._is_recording() if running else None,
+            "services": services,
             "disk": self.disk(),
             "memory": self.memory(),
-            "replay_buffer": self._replay_buffer(),
-            "capture": self._capture(),
+            "replay_buffer": self._replay_buffer() if running else None,
+            "capture": self._capture() if running else dict.fromkeys(
+                ("session_default", "active_episode", "quest", "quest_metrics")
+            ),
         }
 
     def _capture(self) -> dict:
