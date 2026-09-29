@@ -449,7 +449,7 @@ class AxolAdapter:
 
     def _v3_episodes(self, root: Path) -> list[dict]:
         try:
-            import pyarrow.parquet as parquet
+            from pyarrow import parquet
         except ImportError as exc:
             raise AdapterError("LeRobot v3 inventory needs the storage extra (pyarrow)") from exc
         metadata = root / "meta" / "episodes"
