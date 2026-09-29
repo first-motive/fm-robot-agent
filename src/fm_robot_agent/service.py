@@ -148,6 +148,28 @@ def publish_telemetry(session, adapter: RobotAdapter, namespace: str, stop: thre
         stop.wait(TELEMETRY_RETRY_S)
 
 
+#: How often an adapter's upkeep runs. The replay buffer it holds off grew about
+#: 600 MB a minute on fm-rob-01, so half a minute is at most ~300 MB of it.
+MAINTAIN_INTERVAL_S = 30.0
+
+
+def maintain_forever(adapter, stop: threading.Event, interval_s: float = MAINTAIN_INTERVAL_S) -> None:
+    """Run an adapter's upkeep on a timer until asked to stop, and log what it did.
+
+    Upkeep that fails must never take the verb set down with it, so every error
+    is logged and the next tick simply tries again.
+    """
+    while not stop.is_set():
+        try:
+            changed = adapter.maintain()
+        except Exception as exc:  # noqa: BLE001 - the loop outlives any one failure
+            print(f"fm-robot-agent: upkeep failed: {exc}", file=sys.stderr, flush=True)
+        else:
+            if changed:
+                print(f"fm-robot-agent: {changed}", flush=True)
+        stop.wait(interval_s)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Serve this robot's control verbs over Zenoh.",
@@ -215,6 +237,10 @@ def main(argv: list[str] | None = None) -> int:
                 daemon=True,
             ).start()
             print(f"fm-robot-agent: publishing {namespace}/joint_states", flush=True)
+        if hasattr(adapter, "maintain"):
+            threading.Thread(
+                target=maintain_forever, args=(adapter, stop), name="upkeep", daemon=True
+            ).start()
         # Nothing else to do on this thread; Zenoh runs the handler. Wait for the
         # signal systemd sends on stop rather than spinning.
         signal.sigwait({signal.SIGINT, signal.SIGTERM})

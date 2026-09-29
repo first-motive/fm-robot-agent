@@ -26,6 +26,11 @@ RECORDING_RESPONSE = (
 )
 TOPICS_RESPONSE = "response:\nGetTopics_Response(topics=['/joint_states', '/cam_wrist_l/image_raw'])\n"
 COMPOSE_PS = json.dumps({"Service": "ros2", "State": "running", "Status": "Up 2 hours"})
+#: The devbox's own /proc/meminfo, cut to the lines status reads and a neighbour.
+MEMINFO = (
+    "MemTotal:       16135168 kB\nMemFree:         1986560 kB\nMemAvailable:    4996096 kB\n"
+    "SwapTotal:       4194300 kB\nSwapFree:        1289216 kB\n"
+)
 
 
 class WebappStub:
@@ -42,9 +47,14 @@ class WebappStub:
         self.pinned: dict | None = None
         self.recording: int | None = None
         self.ignore_pin = False
+        #: The vendor ships the replay buffer on, and a restart turns it on again.
+        self.replay_enabled = True
+        self.down = False
 
     def first_event(self, path, payload=None, idle_s=None):
         self.calls.append(("subscription", path, payload))
+        if self.down:
+            raise AdapterError("webapp at ws://localhost:3000/trpc did not answer: refused")
         if path == "session.default.subscribe":
             return {"data": self.pinned, "error": False} if self.pinned else None
         if path == "recording.status":
@@ -54,10 +64,19 @@ class WebappStub:
             return {"data": {"isRecording": True, "episode": episode}, "error": False}
         if path == "quest.healthChecks":
             return {"data": {"checks": [{"id": "adb_connected", "status": "success"}]}, "error": False}
+        if path == "quest.metrics":
+            return {"data": {"left_fps": 90, "right_fps": 90, "tick_time_mean_ms": 0.7}, "error": False}
+        if path == "replayBuffer.status":
+            return {"data": {"enabled": self.replay_enabled}, "error": False}
         return {"sessions": self.sessions}
 
     def call(self, method, path, payload=None):
         self.calls.append((method, path, payload))
+        if self.down:
+            raise AdapterError("webapp at ws://localhost:3000/trpc did not answer: refused")
+        if path == "replayBuffer.setEnabled":
+            self.replay_enabled = payload["enabled"]
+            return {"success": True, "message": "disabled"}
         if path == "session.default.set":
             if not self.ignore_pin:
                 self.pinned = next(
@@ -112,6 +131,8 @@ def adapter(loader, monkeypatch):
         journal=Journal(loader / "config-journal.json"),
     )
     robot.webapp = WebappStub()
+    robot.meminfo = loader / "meminfo"
+    robot.meminfo.write_text(MEMINFO, encoding="utf-8")
 
     def fake_run(argv, **kwargs):
         robot.ran.append(argv)
@@ -714,6 +735,102 @@ def test_status_reports_the_shared_capture_state_from_the_webapp(adapter):
     assert capture["quest"]["data"]["checks"][0]["id"] == "adb_connected"
     adapter.webapp.recording = 51  # a take started from the headset, not from here
     assert adapter.status()["capture"]["active_episode"]["id"] == 51
+
+
+def test_status_relays_the_live_quest_metrics(adapter):
+    """The tracking checks are start-up tests; the metrics are what move while teleop runs."""
+    metrics = adapter.status()["capture"]["quest_metrics"]
+    assert (metrics["data"]["left_fps"], metrics["data"]["right_fps"]) == (90, 90)
+
+
+def test_status_reports_host_memory_from_meminfo(adapter):
+    assert adapter.status()["memory"] == {
+        "total_kb": 16135168,
+        "available_kb": 4996096,
+        "swap_total_kb": 4194300,
+        "swap_free_kb": 1289216,
+    }
+
+
+@pytest.mark.parametrize("text", ["", "MemTotal: 16135168 kB\n", "MemTotal: lots\nMemAvailable: 1 kB\n"])
+def test_memory_is_unknown_when_meminfo_cannot_say(adapter, text):
+    adapter.meminfo.write_text(text, encoding="utf-8")
+    assert adapter.status()["memory"] is None
+
+
+def test_memory_is_unknown_on_a_host_without_meminfo(adapter):
+    adapter.meminfo.unlink()
+    assert adapter.status()["memory"] is None
+
+
+def test_status_reports_the_replay_buffer_and_whether_it_is_held_off(adapter):
+    assert adapter.status()["replay_buffer"] == {"enabled": True, "held_off": True}
+
+
+def test_status_answers_while_the_webapp_restarts(adapter):
+    """A recreate takes the webapp away for most of a minute; status must still answer."""
+    adapter.webapp.down = True
+    reported = adapter.status()
+    assert reported["replay_buffer"] is None
+    assert reported["capture"] == {"session_default": None, "active_episode": None,
+                                   "quest": None, "quest_metrics": None}
+    assert reported["memory"]["available_kb"] == 4996096
+
+
+# --- replay buffer -------------------------------------------------------------
+#
+# Anvil's Known Issues: the replay buffer leaks memory while CycloneDDS is in use,
+# and Anvil advises disabling it then. On fm-rob-01 it grew ~600 MB/min and the
+# kernel killed it mid-take (29 Sep 2026). A stack restart turns it on again.
+
+
+def _set_enabled_calls(adapter) -> list:
+    return [call for call in adapter.webapp.calls if call[1] == "replayBuffer.setEnabled"]
+
+
+def test_the_replay_buffer_is_turned_off_while_cyclonedds_is_in_use(adapter):
+    held = adapter.maintain()
+    assert _set_enabled_calls(adapter) == [("mutation", "replayBuffer.setEnabled", {"enabled": False})]
+    assert adapter.webapp.replay_enabled is False
+    assert "replay buffer" in held
+
+
+def test_a_buffer_already_off_is_left_alone(adapter):
+    adapter.webapp.replay_enabled = False
+    assert adapter.maintain() is None
+    assert _set_enabled_calls(adapter) == []
+
+
+def test_a_buffer_a_restart_turned_back_on_is_turned_off_again(adapter):
+    adapter.maintain()
+    adapter.webapp.replay_enabled = True  # the stack was recreated
+    adapter.maintain()
+    assert len(_set_enabled_calls(adapter)) == 2
+    assert adapter.webapp.replay_enabled is False
+
+
+def test_the_buffer_is_left_on_when_cyclonedds_is_off(adapter, loader):
+    config = loader / ".env.config"
+    config.write_text(config.read_text().replace("ENABLE_CYCLONEDDS=true", "ENABLE_CYCLONEDDS=false"))
+    assert adapter.maintain() is None
+    assert _set_enabled_calls(adapter) == []
+    assert adapter.status()["replay_buffer"] == {"enabled": True, "held_off": False}
+
+
+def test_an_operator_can_keep_the_buffer_for_a_debugging_session(adapter, monkeypatch):
+    monkeypatch.setenv("FM_ANVIL_KEEP_REPLAY_BUFFER", "1")
+    assert adapter.maintain() is None
+    assert _set_enabled_calls(adapter) == []
+    assert adapter.status()["replay_buffer"]["held_off"] is False
+
+
+def test_maintenance_waits_out_a_webapp_that_is_down(adapter):
+    """Down during a recreate: nothing raised, and the next tick tries again."""
+    adapter.webapp.down = True
+    assert adapter.maintain() is None
+    adapter.webapp.down = False
+    adapter.maintain()
+    assert adapter.webapp.replay_enabled is False
 
 
 def test_session_pin_is_read_back_and_refused_during_a_take(adapter):

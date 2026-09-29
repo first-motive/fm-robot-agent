@@ -107,6 +107,27 @@ back, which takes the stack's recreate plus the bridge's discovery — up to 90
 seconds. If the telemetry stays dead, the robot restores both files, restarts
 both units, and the command reports the revert.
 
+## Anvil Upkeep
+
+On the Anvil the agent runs one upkeep task every 30 seconds. It turns off the
+vendor replay buffer while `.env.config` has `ENABLE_CYCLONEDDS=true`. Anvil's
+Known Issues say the buffer leaks memory in that configuration. On fm-rob-01 it
+grew about 600 MB a minute, and the kernel killed it during a take on
+29 September 2026. The switch is volatile: a stack restart turns the buffer on
+again, and the next tick turns it off. To keep the buffer for a debugging
+session (the webapp's Diagnostics → Save Buffer), set
+`FM_ANVIL_KEEP_REPLAY_BUFFER=1` in the agent's environment.
+
+`status` reports what an operator needs to see this coming:
+
+- `memory`: the host's `total_kb`, `available_kb`, `swap_total_kb` and
+  `swap_free_kb` from `/proc/meminfo`, or `null` where the agent is not on the
+  robot's host (the Axol).
+- `replay_buffer`: `enabled`, and `held_off` when the agent keeps it off.
+- `capture.quest_metrics`: the headset's live controller rates. The
+  controller-tracking entries in `capture.quest` are start-up checks; they stay
+  failed while teleop works.
+
 ## Status
 
 This repo was seeded from the HTTP agent running on the Anvil workcell devbox,
