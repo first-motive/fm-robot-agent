@@ -28,6 +28,8 @@ from fm_robot_agent.card import CardError, RobotCard, read_card
 from fm_robot_agent.env import EndpointError, router_endpoint
 from fm_robot_agent.fake import FakeAdapter
 from fm_robot_agent.protocol import AdapterError, RobotAdapter
+from fm_robot_agent.so101 import KIND as SO101_KIND
+from fm_robot_agent.so101 import Profile, So101Adapter
 from fm_robot_agent.verbs import KEY_PREFIX, answer
 
 #: The topic the fleet watches a robot through, and therefore the one a severing
@@ -36,7 +38,8 @@ from fm_robot_agent.verbs import KEY_PREFIX, answer
 TELEMETRY_TOPIC = "joint_states"
 
 #: Which adapter drives which card kind. The adapters land one per robot; the
-#: fake is what ``--fake`` serves and what the suite drives.
+#: fake is what ``--fake`` serves and what the suite drives. The SO-101 is not
+#: here: it has no card, and ``--host`` builds its adapter from a profile.
 ADAPTERS = {"fake": FakeAdapter, ANVIL_KIND: AnvilAdapter, AXOL_KIND: AxolAdapter}
 
 
@@ -170,6 +173,31 @@ def maintain_forever(adapter, stop: threading.Event, interval_s: float = MAINTAI
         stop.wait(interval_s)
 
 
+def _hosted_profile(args) -> Profile:
+    """The hosted robot's profile, written first when the flags supply one.
+
+    Every field or none: a profile half from flags and half from disk is two
+    robots' worth of settings that nothing checked belong together.
+    """
+    fields = {
+        "leader_port": args.leader_port,
+        "follower_port": args.follower_port,
+        "leader_id": args.leader_id,
+        "follower_id": args.follower_id,
+        "root": args.root,
+        "stack_project": args.stack_project,
+    }
+    given = [key for key, value in fields.items() if value]
+    if not given:
+        return Profile.read(args.host)
+    if len(given) != len(fields):
+        missing = sorted(set(fields) - set(given))
+        raise AdapterError(f"writing a profile needs every field; missing {', '.join(missing)}")
+    profile = Profile(name=args.host, **fields)
+    print(f"fm-robot-agent: wrote {profile.write()}", flush=True)
+    return profile
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Serve this robot's control verbs over Zenoh.",
@@ -180,6 +208,15 @@ def main(argv: list[str] | None = None) -> int:
         help="Drive a robot that exists only in memory, for a bench run without hardware.",
     )
     parser.add_argument(
+        "--host",
+        metavar="NAME",
+        default="",
+        help="Host a robot that has no computer of its own (an SO-101 pair) under NAME, "
+        "from its profile on this machine. This machine keeps its own identity.",
+    )
+    for flag in ("leader-port", "follower-port", "leader-id", "follower-id", "root", "stack-project"):
+        parser.add_argument(f"--{flag}", default="", help=f"with --host: write the profile's {flag} first")
+    parser.add_argument(
         "--namespace",
         default="",
         help="Override the namespace derived from this host's card. Bench runs only.",
@@ -189,11 +226,15 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.fake:
             card = RobotCard(name=args.namespace.replace("_", "-") or "fm-rob-00", kind="fake")
+            adapter = build_adapter(card.kind)
+        elif args.host:
+            card = RobotCard(name=args.host, kind=SO101_KIND)
+            adapter = So101Adapter(_hosted_profile(args))
         else:
             card = read_card()
-        adapter = build_adapter(card.kind)
+            adapter = build_adapter(card.kind)
         endpoint = router_endpoint()
-    except (CardError, EndpointError) as exc:
+    except (CardError, EndpointError, AdapterError) as exc:
         print(f"fm-robot-agent: {exc}", file=sys.stderr)
         return 1
 
@@ -241,10 +282,17 @@ def main(argv: list[str] | None = None) -> int:
             threading.Thread(
                 target=maintain_forever, args=(adapter, stop), name="upkeep", daemon=True
             ).start()
+        # A hosted robot comes up with its host: plugging the arms in and
+        # running `fm robot host` is the whole bring-up. A failed start still
+        # serves, so the fabric reports "stack down" instead of no robot.
+        if args.host:
+            print(f"fm-robot-agent: {adapter.up().message}", flush=True)
         # Nothing else to do on this thread; Zenoh runs the handler. Wait for the
         # signal systemd sends on stop rather than spinning.
         signal.sigwait({signal.SIGINT, signal.SIGTERM})
         stop.set()
+        if args.host:
+            print(f"fm-robot-agent: {adapter.down().message}", flush=True)
     print("fm-robot-agent: stopped", flush=True)
     return 0
 
