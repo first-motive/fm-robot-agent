@@ -75,6 +75,34 @@ export FM_ROUTER_ENDPOINT=tcp/<router-tailnet-address>:7447
 A client session is opened per command and closed with it, so an operator
 machine holds no state and runs no service.
 
+### Hosting a robot with no computer
+
+An SO-101 leader/follower pair has no computer of its own: each arm is a
+Feetech bus behind a USB serial board. Whichever tailnet machine the arms are
+plugged into hosts the robot, and keeps its own identity while it does:
+
+```bash
+# once per host: write the robot's profile (ports by USB serial number)
+fm robot host fm-rob-03 \
+  --leader-port serial:<leader board> --follower-port serial:<follower board> \
+  --leader-id fm_rob_03_leader --follower-id fm_rob_03_follower \
+  --root <workspace>/data/hf/lerobot/fm-rob-03 \
+  --stack-project <workspace>/fm-teleop/fm_teleop_so101
+
+# every time after: plug the arms in and host it
+fm robot host fm-rob-03
+```
+
+The agent serves `fm/robot/fm_rob_03/*` from this machine and starts fm-teleop's
+`fm-teleop-so101` stack, which owns both arms. `fm robot fm-rob-03 ...` and the
+Desktop reach it from anywhere on the tailnet while it runs; stopping the
+command (Ctrl-C) ends the stack, turns the follower's torque off, and the robot
+leaves the fabric. The profile lives in `~/.config/fm/robots/` on macOS and
+`/etc/fm/robots/` on Linux; it holds no secret, but it is per host, not source.
+
+Datasets land under the profile's `root`. With `<workspace>/data/hf/lerobot/<name>`
+there, `fm policy train <name>/<dataset>` on the same machine finds them.
+
 ## Use
 
 ```bash

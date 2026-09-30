@@ -10,6 +10,7 @@
 #   fm robot fm-rob-01 config set CYCLONEDDS_VERBOSITY=fine
 #   fm robot fm-rob-01 record start --dataset grocery-sort-v1
 #   fm robot fm-rob-01 stop
+#   fm robot host fm-rob-03                          host a computer-less robot (SO-101) here
 #
 # This file is the noun; the first argument is the verb, exactly as fm-tools
 # forwards it. The work lives in fm_robot_agent.client, so the CLI and the
@@ -23,4 +24,10 @@ set -euo pipefail
 _here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_ROOT="$(cd "$_here/../.." && pwd)"
 
+# `host` runs the agent itself on this machine rather than asking one on the
+# fabric: the robot it serves is a pair of arms plugged into this machine.
+if [ "${1:-}" = host ]; then
+  shift
+  exec uv run --project "$FM_ROOT" fm-robot-agent --host "$@"
+fi
 exec uv run --project "$FM_ROOT" fm-robot "$@"
