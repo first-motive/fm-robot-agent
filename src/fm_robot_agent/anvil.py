@@ -30,6 +30,7 @@ import subprocess
 import sys
 import time
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from fm_robot_agent.config import (
@@ -236,8 +237,35 @@ class AnvilAdapter:
     # --- the verb set --------------------------------------------------------
 
     def status(self) -> dict:
+        """The robot now, for the poll and for discovery.
+
+        The webapp reads are independent, so they run together: in turn they
+        cost the sum of their waits, and the pinned session alone waits half a
+        second when nothing is pinned. Recording comes from the webapp's
+        ``recording.status``, which the take read fetches anyway; the recorder's
+        ROS service costs a second of ``ros2`` start-up per poll and is asked
+        only when the webapp cannot say. On fm-rob-01 this took status from
+        1.7 s to about 0.6 s (1 October 2026).
+        """
         services = self.compose_ps()
         running = any(row["state"] == "running" for row in services)
+        if not running:
+            return self._status(services, running, {})
+        reads = {"take": lambda: self.webapp.first_event("recording.status"),
+                 "replay_buffer": self._replay_buffer, "session_default": self._pinned,
+                 "quest": self._quest, "quest_metrics": self._quest_metrics}
+        with ThreadPoolExecutor(max_workers=len(reads)) as pool:
+            futures = {name: pool.submit(_or_none, read) for name, read in reads.items()}
+        return self._status(services, running, {name: future.result() for name, future in futures.items()})
+
+    def _status(self, services: list[dict], running: bool, read: dict) -> dict:
+        take = (read.get("take") or {}).get("data")
+        if not running:
+            recording = None
+        elif isinstance(take, dict):
+            recording = bool(take.get("isRecording"))
+        else:
+            recording = self._is_recording()
         return {
             "mode": self.read_mode(),
             "modes": self.list_configs(),
@@ -248,30 +276,21 @@ class AnvilAdapter:
             "hardware": "running" if running else "down",
             # A stopped stack cannot answer ROS or webapp requests. Waiting for
             # those requests exceeded the caller's Zenoh deadline on every poll.
-            "recording": self._is_recording() if running else None,
+            "recording": recording,
             "services": services,
             "disk": self.disk(),
             "memory": self.memory(),
-            "replay_buffer": self._replay_buffer() if running else None,
-            "capture": self._capture() if running else dict.fromkeys(
-                ("session_default", "active_episode", "quest", "quest_metrics")
-            ),
+            "replay_buffer": read.get("replay_buffer"),
+            # The shared capture state every origin sees: Desktop, CLI, and the
+            # headset. Each field is None when the webapp cannot say, so a
+            # stopped stack still answers status rather than failing it.
+            "capture": {
+                "session_default": read.get("session_default"),
+                "active_episode": _episode(read.get("take")),
+                "quest": read.get("quest"),
+                "quest_metrics": read.get("quest_metrics"),
+            },
         }
-
-    def _capture(self) -> dict:
-        """The shared capture state every origin sees: Desktop, CLI, and the headset.
-
-        Each field is ``None`` when the webapp cannot say, so a stopped stack
-        still answers ``status`` rather than failing it.
-        """
-        state: dict = {}
-        for name, read in (("session_default", self._pinned), ("active_episode", self._active_episode),
-                           ("quest", self._quest), ("quest_metrics", self._quest_metrics)):
-            try:
-                state[name] = read()
-            except AdapterError:
-                state[name] = None
-        return state
 
     def _pinned(self) -> dict | None:
         """The session the webapp — and through it the headset — will record into."""
@@ -281,13 +300,7 @@ class AnvilAdapter:
 
     def _active_episode(self) -> dict | None:
         """The take recording now, whoever started it — a Quest A press included."""
-        event = self.webapp.first_event("recording.status") or {}
-        data = event.get("data") or {}
-        if not data.get("isRecording"):
-            return None
-        episode = data.get("episode") or {}
-        return {"id": episode.get("id"), "created_at_ms": episode.get("createdAt"),
-                "session": (episode.get("session") or {}).get("name")}
+        return _episode(self.webapp.first_event("recording.status"))
 
     def _quest(self) -> object:
         """The headset's health checks as the webapp relays them from ROS.
@@ -1141,3 +1154,21 @@ def _write_atomic(path: Path, text: str) -> None:
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text(text, encoding="utf-8")
     os.replace(tmp, path)
+
+
+def _episode(event: object) -> dict | None:
+    """The take in a ``recording.status`` event, or None when nothing records."""
+    data = event.get("data") if isinstance(event, dict) else None
+    if not isinstance(data, dict) or not data.get("isRecording"):
+        return None
+    episode = data.get("episode") or {}
+    return {"id": episode.get("id"), "created_at_ms": episode.get("createdAt"),
+            "session": (episode.get("session") or {}).get("name")}
+
+
+def _or_none(read: Callable[[], object]) -> object:
+    """One webapp read for status: None when the webapp cannot say."""
+    try:
+        return read()
+    except AdapterError:
+        return None

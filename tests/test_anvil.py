@@ -774,6 +774,39 @@ def test_status_reports_the_replay_buffer_and_whether_it_is_held_off(adapter):
     assert adapter.status()["replay_buffer"] == {"enabled": True, "held_off": True}
 
 
+def test_status_reads_recording_from_the_webapp_without_a_ros_call(adapter):
+    """A `ros2 service call` costs a second per poll; the webapp answers in milliseconds."""
+    adapter.webapp.recording = 51
+    assert adapter.status()["recording"] is True
+    adapter.webapp.recording = None
+    assert adapter.status()["recording"] is False
+    asked_ros = [argv for argv in adapter.ran if "/get_recording_status" in " ".join(argv)]
+    assert asked_ros == [], "status asked the recorder service although the webapp answered"
+
+
+def test_status_asks_the_recorder_service_when_the_webapp_cannot_say(adapter):
+    adapter.webapp.down = True
+    assert adapter.status()["recording"] is False
+    assert any("/get_recording_status" in " ".join(argv) for argv in adapter.ran)
+
+
+def test_status_takes_as_long_as_its_slowest_read_not_their_sum(adapter):
+    """The webapp reads are independent; waiting on them in turn added half a second per pin."""
+    import time
+
+    def slow(read):
+        def wrapped(*args, **kwargs):
+            time.sleep(0.3)
+            return read(*args, **kwargs)
+        return wrapped
+
+    adapter.webapp.first_event = slow(adapter.webapp.first_event)
+    started = time.perf_counter()
+    adapter.status()
+    elapsed = time.perf_counter() - started
+    assert elapsed < 0.6, f"status took {elapsed:.2f} s for reads of 0.3 s each; they ran in turn"
+
+
 def test_status_answers_while_the_webapp_restarts(adapter):
     """A recreate takes the webapp away for most of a minute; status must still answer."""
     adapter.webapp.down = True
