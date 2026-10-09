@@ -673,3 +673,10 @@ def test_recording_sends_no_camera_spec(adapter, server):
     payload = next(p for m, path, p in server.requests if path == "/api/op/start")
     assert "cameras" not in payload
     assert payload["args"]["repo_id"] == "axol/pick-place"
+
+
+def test_there_is_no_collection_loop(adapter, server):
+    """The unattended loop is the Anvil's; an Axol refuses without starting anything."""
+    outcome = adapter.collect("start", {"object": "can"})
+    assert not outcome.ok and "no collection loop" in outcome.message
+    assert server.running_op is None

@@ -8,7 +8,7 @@ One agent runs on each robot host, outside any container, and serves a fixed
 verb set over Zenoh:
 
 ```
-status · up · down · config · record · stop · episodes
+status · up · down · config · record · stop · episodes · session · collect
 ```
 
 Every byte reaches the fleet through the Zenoh router on 7447, so a robot is
@@ -115,6 +115,9 @@ fm robot fm-rob-01 config set CYCLONEDDS_VERBOSITY=fine
 fm robot fm-rob-01 config rollback
 fm robot fm-rob-01 record start --dataset grocery-sort-v1
 fm robot fm-rob-02 record start --dataset checkers-bag-v1 --task "put the nuts in the bag"
+fm robot fm-rob-01 collect start --object can --hours 2
+fm robot fm-rob-01 collect status
+fm robot fm-rob-01 collect stop
 fm robot fm-rob-01 stop
 ```
 
@@ -129,6 +132,28 @@ language-conditioned policy trains on. A robot whose recorder has no field for
 one refuses rather than dropping the sentence: record without it, then write the
 text onto the episodes with `fm policy dataset relabel`. Neither recorder takes
 one today.
+
+`collect` drives the Anvil's unattended visuo-tactile collection loop through
+`scripts/run/tactile-collect.sh` in the anvil-embodied-ai checkout
+(`FM_ANVIL_EMBODIED_AI_DIR`, default `~/anvil-embodied-ai`). The loop moves the
+arm unattended, so a start is refused until an operator arms it on the robot
+itself:
+
+```bash
+touch ~/.local/state/fm-robot-agent/collect-start-enabled   # on the robot; rm to disarm
+```
+
+The flag lives in the agent's state directory (`FM_ROBOT_AGENT_STATE_DIR`) and
+is read on every start, so neither step needs a restart. `stop` and `status`
+are always answered, since stop is the safety path.
+
+`start` takes `--object` and optionally `--hours` (0.01 to 12), `--cycles`
+(1 to 10000), `--speed` (0.1 to 0.5; 0.5 is the only speed verified on
+hardware) and `--no-record`. The robot's own preflight refuses a start it
+cannot supervise, and the client prints a `warning:` line for each condition a
+start went ahead through. `stop` answers once the arm is home, which can take
+three minutes, and the agent refuses a second collect call while one runs.
+`status` is the default. The other robots refuse the verb.
 
 A severing write answers only once the robot has watched its own telemetry come
 back, which takes the stack's recreate plus the bridge's discovery — up to 90
@@ -166,6 +191,11 @@ kept under `agent/` as the baseline. The Zenoh port replaces it.
 The agent exposes no motion topic and subscribes to no command topic. `stop`
 maps to the robot vendor's own pause or disconnect, never to anything this repo
 invents.
+
+The fabric never sends a pose, trajectory or command topic. It can start and
+stop supervised behaviours that move the arm: `collect` on the Anvil, only once
+armed locally and behind the robot's own preflight, and the Axol's
+`run-policy`.
 
 No configuration key commands motion either. The keys that shape how the arms
 move are refused unless the robot reports itself idle — a compose stack that is

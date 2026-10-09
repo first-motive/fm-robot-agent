@@ -213,6 +213,9 @@ class So101Adapter:
     def session(self, action: str, dataset: str = "") -> Outcome:
         return Outcome(ok=False, message="the SO-101 records by take, with no shared session to pin")
 
+    def collect(self, action: str, options: dict[str, str] | None = None) -> Outcome:
+        return Outcome(ok=False, message="the SO-101 has no collection loop")
+
     def record(self, dataset: str, action: str, task: str = "", note: str = "", episode: str = "") -> Outcome:
         if note or episode:
             return Outcome(ok=False, message="the SO-101 stack takes no stop note or episode check")

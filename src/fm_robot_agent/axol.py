@@ -368,6 +368,10 @@ class AxolAdapter:
         """The Axol records by operation, with no shared session a headset could pin."""
         return Outcome(ok=False, message="the Axol has no shared recording session to pin")
 
+    def collect(self, action: str, options: dict[str, str] | None = None) -> Outcome:
+        """The Axol records by operation; the unattended loop exists only on the Anvil."""
+        return Outcome(ok=False, message="the Axol has no collection loop")
+
     def record(self, dataset: str, action: str, task: str = "", note: str = "", episode: str = "") -> Outcome:
         """Start or stop `collect-data`, which takes a dataset and nothing else.
 

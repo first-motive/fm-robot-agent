@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import json
+import re
 
 import pytest
 
+from fm_robot_agent import verbs
 from fm_robot_agent.config import MODE_ALIAS, MOTION, SEVERING, TUNING
 from fm_robot_agent.fake import FakeAdapter
 from fm_robot_agent.protocol import SCHEMA_VERSION, AdapterError, Outcome
@@ -36,7 +38,7 @@ def ask(robot, verb, *, parameters="", payload=None):
 
 
 @pytest.mark.parametrize(
-    "verb", ["status", "up", "down", "config", "record", "stop", "episodes", "session"]
+    "verb", ["status", "up", "down", "config", "record", "stop", "episodes", "session", "collect"]
 )
 def test_every_contract_verb_routes(verb):
     assert verb_of(key(verb), NS) == verb
@@ -292,7 +294,7 @@ def test_a_named_query_still_replies_under_that_name(robot):
     assert answer(key("status"), robot, NS).key == f"{KEY_PREFIX}/{NS}/status"
 
 
-@pytest.mark.parametrize("verb", ["up", "down", "config", "record", "stop"])
+@pytest.mark.parametrize("verb", ["up", "down", "config", "record", "stop", "collect"])
 def test_a_wildcard_discovers_but_never_commands(verb):
     """`fm/robot/*/down` would otherwise take the whole fleet down in one query."""
     assert verb_of(f"{KEY_PREFIX}/*/{verb}", NS) is None
@@ -326,3 +328,78 @@ def test_record_refuses_a_note_on_start_and_a_malformed_episode(robot):
     assert ask(robot, "record", payload={"dataset": "can-pick", "action": "start", "note": "x"}).ok is False
     assert ask(robot, "record", payload={"dataset": "can-pick", "action": "stop", "episode": "41; rm"}).ok is False
     assert ask(robot, "record", payload={"dataset": "can-pick", "action": "stop", "note": "n" * 501}).ok is False
+
+
+# --- collection loop ----------------------------------------------------------
+
+
+def test_collect_defaults_to_status(robot):
+    reported = body(ask(robot, "collect"))
+    assert reported["ok"] is True
+    assert reported["loop"]["active"] is False
+    assert reported["warnings"] == []
+
+
+def test_collect_start_then_stop_runs_the_loop(robot):
+    started = body(ask(robot, "collect", payload={"action": "start", "object": "can", "hours": 2}))
+    assert started["ok"] is True and started["loop"]["active"] is True
+    assert body(ask(robot, "collect", payload={"action": "status"}))["loop"]["run"] == started["loop"]["run"]
+    assert body(ask(robot, "collect", payload={"action": "stop"}))["loop"]["active"] is False
+
+
+def test_a_second_start_carries_the_robots_refusal_code(robot):
+    ask(robot, "collect", payload={"action": "start", "object": "can"})
+    refused = body(ask(robot, "collect", payload={"action": "start", "object": "can"}))
+    assert refused["ok"] is False and refused["code"] == "already_running"
+
+
+def test_collect_passes_only_validated_strings_to_the_adapter(robot, monkeypatch):
+    seen = []
+    monkeypatch.setattr(robot, "collect", lambda action, options=None: seen.append((action, options)) or Outcome(ok=True))
+    ask(robot, "collect", payload={"action": "start", "object": "can", "hours": 1.5, "cycles": 20,
+                                   "speed": 0.5, "no_record": True})
+    ask(robot, "collect", payload={"action": "start", "object": "can", "hours": 0.01, "speed": 0.1})
+    ask(robot, "collect", payload={"action": "stop"})
+    assert seen == [
+        ("start", {"object": "can", "hours": "1.5", "cycles": "20", "speed": "0.5", "no_record": "true"}),
+        ("start", {"object": "can", "hours": "0.01", "speed": "0.1"}),
+        ("stop", None),
+    ]
+
+
+@pytest.mark.parametrize("value", [0.01, 0.1, 0.5, 2, 2.0, 11.999999, 12])
+def test_a_collect_number_reaches_the_script_in_a_form_it_accepts(value):
+    """`str(0.00001)` is `1e-05`; the script's own check would refuse it."""
+    assert re.fullmatch(r"[0-9]*\.?[0-9]+", verbs._decimal(value))
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"action": "pause"},
+        {"action": "start"},                                         # no object
+        {"action": "start", "object": "../etc"},                     # a path, not a name
+        {"action": "start", "object": "Can"},                        # not the robot's spelling
+        {"action": "start", "object": "c" * 33},
+        {"action": "start", "object": "can\n"},                      # `$` would let a newline through
+        {"action": "start", "object": "can", "hours": 0},
+        {"action": "start", "object": "can", "hours": 0.005},
+        {"action": "start", "object": "can", "hours": 13},
+        {"action": "start", "object": "can", "hours": "2"},          # text, not a number
+        {"action": "start", "object": "can", "hours": True},
+        {"action": "start", "object": "can", "cycles": 0},
+        {"action": "start", "object": "can", "cycles": 10001},
+        {"action": "start", "object": "can", "cycles": 2.5},
+        {"action": "start", "object": "can", "speed": 0},
+        {"action": "start", "object": "can", "speed": 0.05},
+        {"action": "start", "object": "can", "speed": 0.6},       # above the speed verified on hardware
+        {"action": "start", "object": "can", "no_record": "yes"},
+        {"action": "stop", "object": "can"},                         # a start field on a stop
+        {"action": "status", "hours": 2},
+        {"no_record": False},                                        # defaults to status
+    ],
+)
+def test_collect_refuses_a_malformed_request(robot, payload):
+    reply = ask(robot, "collect", payload=payload)
+    assert reply.ok is False
+    assert robot.collecting is None

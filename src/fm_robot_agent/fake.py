@@ -47,6 +47,9 @@ class FakeAdapter:
         self.recording: str | None = None
         self.recording_episode: str | None = None
         self.pinned: str | None = None
+        #: The collection loop's run, while one is going, and how many have run.
+        self.collecting: str | None = None
+        self.collect_runs = 0
         self._episodes: dict[str, list[dict]] = {}
         self.config = {
             "ARMS_CONTROL_CONFIG_FILE": MODES[0],
@@ -150,6 +153,29 @@ class FakeAdapter:
             return Outcome(ok=False, message="not recording")
         self.recording = self.recording_episode = None
         return Outcome(ok=True, message="stopped")
+
+    def collect(self, action: str, options: dict[str, str] | None = None) -> Outcome:
+        if action == "start":
+            if self.collecting is not None:
+                return Outcome(ok=False, message="a collection loop is already running; stop it first",
+                               detail={"code": "already_running", **self._loop()})
+            self.collect_runs += 1
+            self.collecting = f"run-{self.collect_runs:04d}"
+            return Outcome(ok=True, message=f"started run {self.collecting}", detail=self._loop())
+        if action == "stop":
+            self.collecting = None
+            return Outcome(ok=True, message="stopped", detail=self._loop())
+        return Outcome(ok=True, message="loop running" if self.collecting else "loop stopped",
+                       detail=self._loop())
+
+    def _loop(self) -> dict:
+        """The loop as the Anvil's script reports it, with no warnings to give."""
+        run = self.collecting or (f"run-{self.collect_runs:04d}" if self.collect_runs else None)
+        return {
+            "loop": {"active": self.collecting is not None, "run": run, "cycles": 0, "successes": 0,
+                     "stop_reason": None, "free_gb": 0},
+            "warnings": [],
+        }
 
     def stop(self) -> Outcome:
         self.recording = None

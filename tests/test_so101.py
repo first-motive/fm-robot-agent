@@ -183,6 +183,11 @@ def test_there_is_no_shared_session_to_pin(adapter):
     assert not adapter.session("set", "pick").ok
 
 
+def test_there_is_no_collection_loop(adapter):
+    assert not adapter.collect("start", {"object": "can"}).ok
+    assert not adapter.collect("status").ok
+
+
 def test_an_absent_dataset_lists_no_episodes(adapter):
     assert adapter.episodes("never-recorded") == []
 

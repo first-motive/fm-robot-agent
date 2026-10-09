@@ -14,7 +14,10 @@ other port.
 - Commit and branch rules live in `CONTRIBUTING.md`. Follow them.
 - Commits are subject-line-only: `prefix: phrase`. No body.
 - Python tooling goes through `uv` — never bare `pip`, `python`, or `poetry`.
-- The agent never accepts a motion command. Inbound is the fixed verb set only.
+- The fabric never sends a pose, trajectory or command topic. It can start and
+  stop supervised behaviours that move the arm — `collect` on the Anvil (only
+  once armed locally) and the Axol's `run-policy`. Inbound is the fixed verb
+  set only.
 
 ## Testing
 
