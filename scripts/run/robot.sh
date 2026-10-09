@@ -10,7 +10,7 @@
 #   fm robot fm-rob-01 config set CYCLONEDDS_VERBOSITY=fine
 #   fm robot fm-rob-01 record start --dataset grocery-sort-v1
 #   fm robot fm-rob-01 collect start --object can --hours 2   needs arming on the robot;
-#                                    --hours 0.01-12, --speed 0.1-0.5, --cycles, --no-record
+#                                    --hours 0.01-12, --speed 0.1-3.0, --cycles, --no-record
 #   fm robot fm-rob-01 collect status
 #   fm robot fm-rob-01 stop
 #   fm robot host fm-rob-03                          host a computer-less robot (SO-101) here

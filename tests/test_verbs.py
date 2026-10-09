@@ -392,7 +392,7 @@ def test_a_collect_number_reaches_the_script_in_a_form_it_accepts(value):
         {"action": "start", "object": "can", "cycles": 2.5},
         {"action": "start", "object": "can", "speed": 0},
         {"action": "start", "object": "can", "speed": 0.05},
-        {"action": "start", "object": "can", "speed": 0.6},       # above the speed verified on hardware
+        {"action": "start", "object": "can", "speed": 3.1},       # above the speed verified on hardware
         {"action": "start", "object": "can", "no_record": "yes"},
         {"action": "stop", "object": "can"},                         # a start field on a stop
         {"action": "status", "hours": 2},
