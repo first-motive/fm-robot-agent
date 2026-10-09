@@ -259,7 +259,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--object", default="", help="collect start: the object to collect with (config/objects name)")
     parser.add_argument("--hours", type=float, help="collect start: stop the loop after this many hours (0.01 to 12)")
     parser.add_argument("--cycles", type=int, help="collect start: stop the loop after this many cycles")
-    parser.add_argument("--speed", type=float, help="collect start: the arm's speed scale (0.1 to 0.5)")
+    parser.add_argument("--speed", type=float, help="collect start: the arm's speed scale (0.1 to 3.0; the loop defaults to 2.5)")
     parser.add_argument("--no-record", action="store_true", help="collect start: run the loop without recording")
     parser.add_argument("--json", action="store_true", dest="as_json", help="print the raw reply")
     args = parser.parse_args(argv)

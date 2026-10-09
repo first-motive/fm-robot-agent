@@ -64,12 +64,13 @@ COLLECT_START_FIELDS = ("object", "hours", "cycles", "speed", "no_record")
 OBJECT_PATTERN = re.compile(r"[a-z0-9_][a-z0-9_-]*")
 OBJECT_MAX_LEN = 32
 
-#: Bounds on one unattended run started from the fabric. 0.5 is the only speed
-#: verified on hardware and 0.1 is the task node's MIN_SPEED_SCALE. Twelve hours
+#: Bounds on one unattended run started from the fabric. 3.0 is the fastest speed
+#: verified on hardware (fm-rob-01, 2026-10-09) and the task node's own ceiling; 0.1
+#: is its MIN_SPEED_SCALE. Omitting --speed runs at the loop's default, 2.5. Twelve hours
 #: is a working day plus margin, and the cycle ceiling is a typo guard, not a
 #: capacity.
 MIN_COLLECT_SPEED = 0.1
-MAX_COLLECT_SPEED = 0.5
+MAX_COLLECT_SPEED = 3.0
 MIN_COLLECT_HOURS = 0.01
 MAX_COLLECT_HOURS = 12
 MAX_COLLECT_CYCLES = 10_000

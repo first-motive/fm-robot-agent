@@ -148,8 +148,8 @@ is read on every start, so neither step needs a restart. `stop` and `status`
 are always answered, since stop is the safety path.
 
 `start` takes `--object` and optionally `--hours` (0.01 to 12), `--cycles`
-(1 to 10000), `--speed` (0.1 to 0.5; 0.5 is the only speed verified on
-hardware) and `--no-record`. The robot's own preflight refuses a start it
+(1 to 10000), `--speed` (0.1 to 3.0, the fastest verified on hardware;
+the loop defaults to 2.5) and `--no-record`. The robot's own preflight refuses a start it
 cannot supervise, and the client prints a `warning:` line for each condition a
 start went ahead through. `stop` answers once the arm is home, which can take
 three minutes, and the agent refuses a second collect call while one runs.
