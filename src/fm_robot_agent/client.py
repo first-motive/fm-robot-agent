@@ -14,6 +14,9 @@ and the reply into either a line a person reads or the JSON a script does.
     fm robot fm-rob-01 record stop --dataset grocery-sort-v1 --episode 41 --note "dropped once"
     fm robot fm-rob-01 session set --dataset grocery-sort-v1
     fm robot fm-rob-01 session get
+    fm robot fm-rob-01 collect start --object can --hours 2    (armed on the robot first)
+    fm robot fm-rob-01 collect stop
+    fm robot fm-rob-01 collect status
     fm robot list
 
 ``list`` is a wildcard query over ``fm/robot/*/status``: the fabric is the
@@ -34,6 +37,7 @@ import sys
 
 from fm_robot_agent.env import EndpointError, router_endpoint
 from fm_robot_agent.verbs import (
+    COLLECT_ACTIONS,
     CONFIG_ACTIONS,
     KEY_PREFIX,
     READ_VERBS,
@@ -49,6 +53,10 @@ QUERY_TIMEOUT_S = 15.0
 #: telemetry come back, which takes the stack's recreate plus the bridge's
 #: discovery. The one verb whose answer is worth waiting minutes for.
 CONFIG_TIMEOUT_S = 150.0
+
+#: A collect stop answers once the arm is home, which the robot's own script
+#: waits up to 180 s for. The adapter gives it 210 s; this outlasts that.
+COLLECT_TIMEOUT_S = 220.0
 
 #: `mode` is not a verb on the wire any more — it is a config write of the one
 #: key each robot spells its own way, kept here because it reads better than
@@ -121,6 +129,14 @@ def build_payload(verb: str, args: argparse.Namespace) -> dict | None:
         if args.dataset:
             body["dataset"] = args.dataset
         return body
+    if verb == "collect":
+        body = {"action": args.value or "status"}
+        for name in ("object", "hours", "cycles", "speed"):
+            if getattr(args, name, None) not in (None, ""):
+                body[name] = getattr(args, name)
+        if getattr(args, "no_record", False):
+            body["no_record"] = True
+        return body
     return None
 
 
@@ -184,18 +200,25 @@ def render(replies: list[dict], as_json: bool) -> None:
         print(json.dumps(replies if len(replies) != 1 else replies[0], indent=2, sort_keys=True))
         return
     for reply in replies:
+        who = f"{safe(reply['device'])}: " if reply.get("device") else ""
+        # A condition a collect start went ahead through, such as silent tactile
+        # sensors. It is the line an operator must not miss, so it is not left
+        # inside the JSON below.
+        for warning in reply.get("warnings") or []:
+            print(f"{who}warning: {safe(warning.get('detail') if isinstance(warning, dict) else warning)}")
         if reply.get("ok") is False:
             # The class is what says which guard refused, and it is the first
             # thing an operator needs: a motion refusal is undone by taking the
-            # stack down, an unknown one is not undone at all.
-            guard = f" ({safe(reply['class'])})" if reply.get("class") else ""
-            who = f"{safe(reply['device'])}: " if reply.get("device") else ""
+            # stack down, an unknown one is not undone at all. A collect refusal
+            # carries the robot's own code in the same place.
+            reason = reply.get("class") or reply.get("code")
+            guard = f" ({safe(reason)})" if reason else ""
             print(f"{who}refused{guard}: {safe(reply.get('error') or reply.get('message') or 'no reason given')}")
             continue
         if "config" in reply:
             render_config(reply)
             continue
-        shown = {k: v for k, v in reply.items() if k != "schema_version"}
+        shown = {k: v for k, v in reply.items() if k not in ("schema_version", "warnings")}
         print(safe(json.dumps(shown, sort_keys=True)))
 
 
@@ -212,7 +235,7 @@ def main(argv: list[str] | None = None) -> int:
         "value",
         nargs="?",
         help=f"mode: the config; record: start | stop; config: {' | '.join(CONFIG_ACTIONS)}; "
-        f"session: {' | '.join(SESSION_ACTIONS)}",
+        f"session: {' | '.join(SESSION_ACTIONS)}; collect: {' | '.join(COLLECT_ACTIONS)}",
     )
     parser.add_argument("assignment", nargs="?", help="config set: KEY=VALUE")
     parser.add_argument(
@@ -233,6 +256,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--episode", default="", help="record stop: the episode ID you mean to stop; another take refuses"
     )
+    parser.add_argument("--object", default="", help="collect start: the object to collect with (config/objects name)")
+    parser.add_argument("--hours", type=float, help="collect start: stop the loop after this many hours (0.01 to 12)")
+    parser.add_argument("--cycles", type=int, help="collect start: stop the loop after this many cycles")
+    parser.add_argument("--speed", type=float, help="collect start: the arm's speed scale (0.1 to 0.5)")
+    parser.add_argument("--no-record", action="store_true", help="collect start: run the loop without recording")
     parser.add_argument("--json", action="store_true", dest="as_json", help="print the raw reply")
     args = parser.parse_args(argv)
 
@@ -256,6 +284,17 @@ def main(argv: list[str] | None = None) -> int:
             parser.error(f"session takes one of: {', '.join(SESSION_ACTIONS)}")
         if args.value == "set" and not args.dataset:
             parser.error("session set needs --dataset")
+    if not listing and args.verb == "collect":
+        action = args.value or "status"
+        if action not in COLLECT_ACTIONS:
+            parser.error(f"collect takes one of: {', '.join(COLLECT_ACTIONS)}")
+        start_flags = args.object or args.no_record or any(
+            value is not None for value in (args.hours, args.cycles, args.speed)
+        )
+        if action == "start" and not args.object:
+            parser.error("collect start needs --object")
+        if action != "start" and start_flags:
+            parser.error("--object, --hours, --cycles, --speed and --no-record belong to collect start")
 
     try:
         session = open_session()
@@ -277,7 +316,7 @@ def main(argv: list[str] | None = None) -> int:
             key,
             build_payload(args.verb, args),
             parameters,
-            timeout_s=CONFIG_TIMEOUT_S if verb == "config" else QUERY_TIMEOUT_S,
+            timeout_s={"config": CONFIG_TIMEOUT_S, "collect": COLLECT_TIMEOUT_S}.get(verb, QUERY_TIMEOUT_S),
         )
 
     if not replies:

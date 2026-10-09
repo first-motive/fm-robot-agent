@@ -18,7 +18,7 @@ flowchart LR
     R --> S[service.py<br/>Zenoh session]
     S -->|key + payload| V[verbs.py<br/>pure router]
     V --> A[RobotAdapter]
-    A --> AN[anvil adapter<br/>docker compose + tRPC]
+    A --> AN[anvil adapter<br/>docker compose + tRPC<br/>tactile-collect.sh]
     A --> AX[axol adapter<br/>https://localhost:8001]
     AX -->|CDR JointState| P[publisher<br/>ns/joint_states] --> R
     C[card.py] -.->|namespace, kind| S
@@ -77,7 +77,7 @@ robot.
 | `verbs.py` | key → adapter call → reply, as one pure function |
 | `card.py` | this host's identity card: name, namespace, robot kind |
 | `env.py` | the router endpoint, from the environment or `/etc/fm-comms.env` |
-| `anvil.py` | the Anvil workcell: compose, the webapp's tRPC lane, ros2 services |
+| `anvil.py` | the Anvil workcell: compose, the webapp's tRPC lane, ros2 services, the collection loop's script |
 | `trpc.py` | the webapp's tRPC-over-WebSocket protocol, the two call shapes |
 | `axol.py` | the Almond Axol: its HTTPS server, and its telemetry as JointState |
 | `cdr.py` | CDR encoding, so an Axol reaches the fabric looking like a ROS rig |

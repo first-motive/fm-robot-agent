@@ -1,6 +1,6 @@
 """The Anvil workcell, driven from its host.
 
-Three mechanisms, each for the thing only it can do:
+Four mechanisms, each for the thing only it can do:
 
 ``docker compose``
     Bring the stack up and down, and recreate it after a mode change. The agent
@@ -15,6 +15,12 @@ the webapp's tRPC API
     ``stop`` and the two state getters. ``anvil_msgs`` lives only inside that
     container, so a service call has to be made from within it.
 
+``scripts/run/tactile-collect.sh`` in the anvil-embodied-ai checkout
+    ``collect``. The unattended collection loop belongs to that repo, and so do
+    its preflight and its stop, which drives the arm home. The agent adds one
+    gate of its own — a start must be armed locally — then asks the script and
+    relays its JSON.
+
 Mode is a file: ``ARMS_CONTROL_CONFIG_FILE`` in ``.env.config``, validated against
 the real ``config/`` directory and applied by recreating the stack.
 """
@@ -22,12 +28,14 @@ the real ``config/`` directory and applied by recreating the stack.
 from __future__ import annotations
 
 import ipaddress
+import json
 import os
 import re
 import shlex
 import shutil
 import subprocess
 import sys
+import threading
 import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
@@ -198,6 +206,28 @@ MEMINFO_FIELDS = {
     "SwapFree": "swap_free_kb",
 }
 
+#: The robot-side front door to the unattended collection loop, relative to the
+#: anvil-embodied-ai checkout. Its `--json` reply is the contract: `ok`, an
+#: `error` with a stable `code` on a refusal, `warnings`, and the loop's `data`.
+COLLECT_SCRIPT = Path("scripts") / "run" / "tactile-collect.sh"
+
+#: The checkout the script runs from, which the agent's own user owns on the
+#: workcell. Named in the refusal when the script is not there.
+EMBODIED_AI_DIR_ENV = "FM_ANVIL_EMBODIED_AI_DIR"
+
+#: The file whose presence arms `collect start` on this robot. Absent is off.
+#: Local by design: arming means someone with a shell on the robot decided the
+#: arm may run unattended, which no message off the fabric can stand in for.
+COLLECT_ARM_FILE = STATE_DIR / "collect-start-enabled"
+
+#: How long each action is given. A start runs a preflight and waits for the
+#: loop's container; a stop waits up to 180 s for the arm to reach home.
+COLLECT_TIMEOUTS_S = {"status": 30, "start": 60, "stop": 210}
+
+#: The script's flag for each start option the router passes on. Only these
+#: reach the argument list, whatever else an options dict holds.
+COLLECT_FLAGS = {"object": "--object", "hours": "--hours", "cycles": "--cycles", "speed": "--speed"}
+
 #: Set to keep the vendor replay buffer on, for a debugging session that needs
 #: its "Save Buffer" episode. Read on every tick so it needs no agent restart.
 KEEP_REPLAY_BUFFER = "FM_ANVIL_KEEP_REPLAY_BUFFER"
@@ -215,10 +245,17 @@ class AnvilAdapter:
         comms_env: Path | None = None,
         journal: Journal | None = None,
         fabric_probe: Callable[[float], bool] | None = None,
+        embodied_ai_dir: Path | None = None,
+        collect_arm: Path | None = None,
     ) -> None:
         self.loader_dir = loader_dir or Path(
             os.environ.get("FM_ANVIL_LOADER_DIR", str(Path.home() / "anvil-loader"))
         )
+        self.embodied_ai_dir = embodied_ai_dir or Path(
+            os.environ.get(EMBODIED_AI_DIR_ENV, str(Path.home() / "anvil-embodied-ai"))
+        )
+        self.collect_arm = collect_arm or COLLECT_ARM_FILE
+        self._collect_lock = threading.Lock()
         self.config_dir = self.loader_dir / "config"
         self.env_config = self.loader_dir / ".env.config"
         self.recordings_dir = self.loader_dir / "data" / "recordings"
@@ -451,6 +488,81 @@ class AnvilAdapter:
             "{state: pause}",
         )
         return Outcome(ok=True, message="hardware paused", detail={"state": "pause"})
+
+    def collect(self, action: str, options: dict[str, str] | None = None) -> Outcome:
+        """Start, stop, or report the loop through anvil-embodied-ai's own script.
+
+        The loop moves the arm for hours, so the fabric alone cannot start it: a
+        start is refused until an operator arms it on this host, and the flag is
+        read on every start, so disarming needs no restart. Stop and status are
+        always answered — stop is the safety path.
+
+        One call at a time. A stop can take three and a half minutes, and a
+        second call queued behind it would answer long after its caller gave up,
+        so it is refused at once instead.
+        """
+        if action == "start" and not self.collect_arm.is_file():
+            return Outcome(ok=False, message=(
+                "collect start is not armed on this robot: the loop moves the arm unattended, so an "
+                "operator enables it locally first by creating the collect-start-enabled flag in the "
+                "agent's state directory (see the fm-robot-agent README)"
+            ), detail={"code": "not_armed"})
+        if not self._collect_lock.acquire(blocking=False):
+            return Outcome(ok=False, message="busy: another collect call is still running; ask again shortly",
+                           detail={"code": "busy"})
+        try:
+            return self._run_collect(action, options or {})
+        finally:
+            self._collect_lock.release()
+
+    def _run_collect(self, action: str, options: dict[str, str]) -> Outcome:
+        """Run the script once and turn its JSON into an outcome.
+
+        Argument list, never a shell. Every option was checked by the router, and
+        only the flags :data:`COLLECT_FLAGS` names are passed on. A refusal is
+        the script's answer, carried with its code. Anything else the script
+        prints stays in this host's journal: the reply crosses the fabric, and
+        raw output and local paths have no business there.
+        """
+        script = self.embodied_ai_dir / COLLECT_SCRIPT
+        if not script.is_file():
+            return Outcome(ok=False, message=f"no anvil-embodied-ai checkout on this robot; "
+                                             f"set {EMBODIED_AI_DIR_ENV} to it")
+        argv = [str(script), action, "--json"]
+        for name, value in options.items():
+            if name in COLLECT_FLAGS:
+                argv += [COLLECT_FLAGS[name], value]
+        if options.get("no_record") == "true":
+            argv.append("--no-record")
+        try:
+            # tradeoff: a timeout kills the script, not the loop container it
+            # started. The container is independent and keeps its own SIGINT and
+            # HOME handling, so a stop that times out here may still be homing.
+            done = subprocess.run(argv, capture_output=True, text=True,
+                                  timeout=COLLECT_TIMEOUTS_S[action], check=False)
+        except subprocess.TimeoutExpired as exc:
+            raise AdapterError(
+                f"tactile-collect {action} timed out after {exc.timeout:.0f} s; the loop's state is unknown "
+                "(a stop may still be homing the arm). Ask with `fm robot <name> collect status`"
+            ) from exc
+        except OSError as exc:
+            print(f"fm-robot-agent: tactile-collect {action}: {exc}", file=sys.stderr, flush=True)
+            raise AdapterError(f"tactile-collect {action} could not start") from exc
+        try:
+            reply = json.loads(done.stdout)
+        except json.JSONDecodeError:
+            reply = None
+        if not isinstance(reply, dict) or not isinstance(reply.get("data"), dict):
+            output = (done.stderr or done.stdout).strip()
+            print(f"fm-robot-agent: tactile-collect {action}: {output}", file=sys.stderr, flush=True)
+            raise AdapterError(f"tactile-collect did not answer as expected (exit {done.returncode})")
+        loop = reply["data"]
+        detail = {"loop": loop, "warnings": reply.get("warnings") or []}
+        if not reply.get("ok"):
+            error = reply.get("error") or {}
+            return Outcome(ok=False, message=str(error.get("detail") or "refused"),
+                           detail={**detail, "code": str(error.get("code") or "")})
+        return Outcome(ok=True, message=_collect_message(action, loop), detail=detail)
 
     def episodes(self, dataset: str) -> list[dict]:
         base = self.recordings_dir / dataset
@@ -901,8 +1013,6 @@ class AnvilAdapter:
 
     def compose_ps(self) -> list[dict]:
         """Compose service rows, as ``status`` reports them."""
-        import json
-
         try:
             out = subprocess.run(
                 ["docker", "compose", "ps", "--format", "json"],
@@ -1082,6 +1192,17 @@ class AnvilAdapter:
             if field and number.isdigit():
                 found[field] = int(number)
         return found if len(found) == len(MEMINFO_FIELDS) else None
+
+
+def _collect_message(action: str, loop: dict) -> str:
+    """One line for a collect reply, which the script's JSON leaves to its reader."""
+    if action == "start":
+        return f"started run {loop.get('run')}"
+    if action == "stop":
+        return "stopped"
+    state = "running" if loop.get("active") else "stopped"
+    return (f"loop {state}: run {loop.get('run') or 'none'}, {loop.get('cycles', 0)} cycles, "
+            f"{loop.get('successes', 0)} successes, {loop.get('free_gb', '?')} GB free")
 
 
 def _dir_size_kb(path: Path) -> int:

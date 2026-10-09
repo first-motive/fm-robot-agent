@@ -299,6 +299,167 @@ def test_record_stop_goes_through_the_webapp(adapter):
     assert any(call[1] == "recording.stop" for call in adapter.webapp.calls)
 
 
+# --- collection loop ---------------------------------------------------------
+
+#: The robot-side script's --json reply, as tactile-collect.sh prints it.
+COLLECT_DATA = {"active": True, "run": "20261009T080000Z", "cycles": 3, "successes": 2,
+                "stop_reason": None, "free_gb": 812}
+
+
+def collect_reply(ok=True, error=None, warnings=()):
+    reply = {"schema_version": 1, "verb": "tactile-collect", "host": "fm-rob-01", "ok": ok,
+             "warnings": list(warnings), "data": COLLECT_DATA}
+    if error:
+        reply["error"] = error
+    return json.dumps(reply) + "\n"
+
+
+class ScriptStub:
+    """tactile-collect.sh at the subprocess boundary: what it was run with, and its answer."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[list[str], dict]] = []
+        self.stdout = collect_reply()
+        self.returncode = 0
+
+    def run(self, argv, **kwargs):
+        self.calls.append((argv, kwargs))
+        return subprocess.CompletedProcess(argv, self.returncode, self.stdout, "")
+
+
+@pytest.fixture
+def collect_calls(adapter, loader, monkeypatch) -> ScriptStub:
+    """A checkout holding the script, and a stub that answers as the script would."""
+    adapter.embodied_ai_dir = loader / "anvil-embodied-ai"
+    script = adapter.embodied_ai_dir / anvil.COLLECT_SCRIPT
+    script.parent.mkdir(parents=True)
+    script.write_text("#!/usr/bin/env bash\n", encoding="utf-8")
+    adapter.collect_arm = loader / "collect-start-enabled"
+    adapter.collect_arm.touch()
+    stub = ScriptStub()
+    monkeypatch.setattr(subprocess, "run", stub.run)
+    return stub
+
+
+def test_collect_status_runs_the_script_with_json(adapter, collect_calls):
+    outcome = adapter.collect("status")
+    argv, kwargs = collect_calls.calls[0]
+    assert argv == [str(adapter.embodied_ai_dir / anvil.COLLECT_SCRIPT), "status", "--json"]
+    assert kwargs["timeout"] == anvil.COLLECT_TIMEOUTS_S["status"]
+    assert "shell" not in kwargs
+    assert outcome.ok and outcome.detail == {"loop": COLLECT_DATA, "warnings": []}
+    assert outcome.message.startswith("loop running: run 20261009T080000Z")
+
+
+def test_collect_start_passes_each_option_as_its_flag(adapter, collect_calls):
+    outcome = adapter.collect(
+        "start", {"object": "can", "hours": "2", "cycles": "40", "speed": "0.5", "no_record": "true"}
+    )
+    argv, kwargs = collect_calls.calls[0]
+    assert argv[1:] == ["start", "--json", "--object", "can", "--hours", "2", "--cycles", "40",
+                        "--speed", "0.5", "--no-record"]
+    assert kwargs["timeout"] == anvil.COLLECT_TIMEOUTS_S["start"]
+    assert outcome.message == "started run 20261009T080000Z"
+
+
+def test_collect_passes_no_option_the_flags_table_does_not_name(adapter, collect_calls):
+    adapter.collect("start", {"object": "can", "host": "elsewhere"})
+    assert collect_calls.calls[0][0][3:] == ["--object", "can"]
+
+
+def test_collect_stop_waits_for_the_arm_to_reach_home(adapter, collect_calls):
+    assert adapter.collect("stop").message == "stopped"
+    assert collect_calls.calls[0][1]["timeout"] >= 180
+
+
+def test_a_start_carries_the_warnings_it_went_ahead_through(adapter, collect_calls):
+    warning = {"code": "tactile_silent", "detail": "2 of 4 /gripper/tactile/* topics have a publisher"}
+    collect_calls.stdout = collect_reply(warnings=[warning])
+    outcome = adapter.collect("start", {"object": "can"})
+    assert outcome.ok and outcome.detail["warnings"] == [warning]
+
+
+def test_a_preflight_refusal_carries_its_code_and_reason(adapter, collect_calls):
+    collect_calls.returncode = 3
+    collect_calls.stdout = collect_reply(
+        ok=False, error={"code": "nodes_down", "detail": "classical nodes are not up"}
+    )
+    outcome = adapter.collect("start", {"object": "can"})
+    assert not outcome.ok
+    assert outcome.message == "classical nodes are not up"
+    assert outcome.detail["code"] == "nodes_down"
+    assert outcome.detail["loop"] == COLLECT_DATA
+
+
+def test_a_missing_checkout_names_the_variable_that_points_at_it(adapter, collect_calls, loader):
+    adapter.embodied_ai_dir = loader / "nowhere"
+    outcome = adapter.collect("status")
+    assert not outcome.ok
+    assert anvil.EMBODIED_AI_DIR_ENV in outcome.message
+    assert str(loader) not in outcome.message, "a local path has no business on the fabric"
+
+
+def test_a_start_is_refused_until_armed_on_the_robot(adapter, collect_calls):
+    adapter.collect_arm.unlink()
+    outcome = adapter.collect("start", {"object": "can"})
+    assert not outcome.ok and outcome.detail["code"] == "not_armed"
+    # The path names the robot's home directory, which a fabric peer has no need to learn.
+    assert str(adapter.collect_arm) not in outcome.message
+    assert "collect-start-enabled" in outcome.message
+    assert collect_calls.calls == [], "an unarmed start must not reach the script"
+
+
+def test_stop_and_status_need_no_arming(adapter, collect_calls):
+    """Stop is the safety path; it can never be locked behind the start's gate."""
+    adapter.collect_arm.unlink()
+    assert adapter.collect("stop").ok
+    assert adapter.collect("status").ok
+
+
+def test_arming_is_read_on_every_start(adapter, collect_calls):
+    adapter.collect_arm.unlink()
+    assert not adapter.collect("start", {"object": "can"}).ok
+    adapter.collect_arm.touch()
+    assert adapter.collect("start", {"object": "can"}).ok
+
+
+def test_a_second_call_during_a_long_stop_is_refused_at_once(adapter, collect_calls, monkeypatch):
+    seen = []
+
+    def run_while_busy(argv, **kwargs):
+        # The stop is still running when another caller arrives.
+        seen.append(adapter.collect("status"))
+        return subprocess.CompletedProcess(argv, 0, collect_reply(), "")
+
+    monkeypatch.setattr(subprocess, "run", run_while_busy)
+    assert adapter.collect("stop").ok
+    assert not seen[0].ok and seen[0].detail["code"] == "busy"
+    monkeypatch.setattr(subprocess, "run", collect_calls.run)
+    assert adapter.collect("status").ok, "the lock is released once the stop answers"
+
+
+def test_a_script_that_times_out_leaves_the_loop_state_unknown(adapter, collect_calls, monkeypatch):
+    def hang(argv, **kwargs):
+        raise subprocess.TimeoutExpired(argv, kwargs["timeout"])
+
+    monkeypatch.setattr(subprocess, "run", hang)
+    with pytest.raises(AdapterError, match="state is unknown.*collect status"):
+        adapter.collect("stop")
+    monkeypatch.setattr(subprocess, "run", collect_calls.run)
+    assert adapter.collect("status").ok, "a timeout must not leave the lock held"
+
+
+def test_a_script_that_answers_without_json_is_a_fault_with_a_fixed_reason(adapter, collect_calls, monkeypatch):
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda argv, **kw: subprocess.CompletedProcess(argv, 2, "", "error: /home/anvil/secret path"),
+    )
+    with pytest.raises(AdapterError) as raised:
+        adapter.collect("start", {"object": "can"})
+    assert str(raised.value) == "tactile-collect did not answer as expected (exit 2)"
+
+
 # --- episodes ----------------------------------------------------------------
 
 

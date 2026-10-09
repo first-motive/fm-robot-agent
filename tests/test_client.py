@@ -96,6 +96,11 @@ def test_record_without_a_task_sends_no_task_key():
         ["fm-rob-01", "config", "reboot"],  # an action config does not have
         ["fm-rob-01", "config", "set"],     # set without KEY=VALUE
         ["fm-rob-01", "config", "set", "CYCLONEDDS_VERBOSITY"],  # no value
+        ["fm-rob-01", "collect", "pause"],                     # an action collect does not have
+        ["fm-rob-01", "collect", "start"],                     # start without an object
+        ["fm-rob-01", "collect", "stop", "--hours", "2"],      # a start flag on a stop
+        ["fm-rob-01", "collect", "--object", "can"],           # a start flag on the default status
+        ["fm-rob-01", "collect", "start", "--object", "can", "--cycles", "2.5"],  # not a whole number
     ],
 )
 def test_incomplete_invocations_are_refused_before_any_session_opens(argv):
@@ -215,3 +220,52 @@ def test_a_reply_key_names_the_robot_that_answered():
 def test_a_key_that_is_not_ours_names_no_robot():
     assert client.device_of("fm/robot/fm_rob_01/status/extra") == ""
     assert client.device_of("other/ns/fm_rob_01/status") == ""
+
+
+# --- collect -----------------------------------------------------------------
+
+
+def collect_args(**overrides) -> argparse.Namespace:
+    return args(**{"object": "", "hours": None, "cycles": None, "speed": None, "no_record": False, **overrides})
+
+
+def test_collect_defaults_to_status():
+    assert client.build_payload("collect", collect_args()) == {"action": "status"}
+
+
+def test_collect_start_carries_only_the_flags_given():
+    assert client.build_payload("collect", collect_args(value="start", object="can", hours=2.0)) == {
+        "action": "start",
+        "object": "can",
+        "hours": 2.0,
+    }
+    payload = client.build_payload(
+        "collect", collect_args(value="start", object="can", cycles=40, speed=0.5, no_record=True)
+    )
+    assert payload == {"action": "start", "object": "can", "cycles": 40, "speed": 0.5, "no_record": True}
+
+
+def test_the_collect_timeout_constant_outlasts_the_adapters_stop():
+    """A constant check: the robot's stop waits up to 180 s for home, the adapter 210 s."""
+    assert client.COLLECT_TIMEOUT_S > 210 > client.QUERY_TIMEOUT_S
+
+
+def test_a_warning_gets_a_line_of_its_own(capsys):
+    client.render(
+        [{"ok": True, "message": "started run r1", "loop": {"active": True},
+          "warnings": [{"code": "tactile_silent", "detail": "2 of 4 tactile topics have a publisher"}]}],
+        as_json=False,
+    )
+    lines = capsys.readouterr().out.splitlines()
+    assert lines[0] == "warning: 2 of 4 tactile topics have a publisher"
+    assert "warnings" not in lines[1]
+
+
+def test_a_warning_that_is_plain_text_still_gets_its_line(capsys):
+    client.render([{"ok": True, "message": "stopped", "warnings": ["no attended hour has passed"]}], as_json=False)
+    assert capsys.readouterr().out.splitlines()[0] == "warning: no attended hour has passed"
+
+
+def test_a_collect_refusal_names_the_robots_code(capsys):
+    client.render([{"ok": False, "message": "classical nodes are not up", "code": "nodes_down"}], as_json=False)
+    assert capsys.readouterr().out.strip() == "refused (nodes_down): classical nodes are not up"

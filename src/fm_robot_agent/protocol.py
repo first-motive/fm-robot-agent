@@ -10,7 +10,10 @@ The verb set is fixed and small on purpose. It is the whole inbound surface the
 fleet has to a robot, so every addition widens what a compromised router can ask
 for. Motion is not in it: neither robot accepts a trajectory or a command topic
 from the fabric, and ``stop`` maps to the vendor's own pause or disconnect rather
-than to anything this repo invents.
+than to anything this repo invents. The fabric never sends a pose, trajectory
+or command topic. It can start and stop supervised behaviours that move the
+arm: ``collect`` on the Anvil, only once armed locally, and the Axol's
+``run-policy``.
 """
 
 from __future__ import annotations
@@ -150,6 +153,23 @@ class RobotAdapter(Protocol):
         recorder has to write into the dataset for it to survive. An adapter
         whose recorder has no field for one refuses through
         :func:`task_not_recorded` rather than accepting a sentence it will drop.
+        """
+
+    def collect(self, action: str, options: dict[str, str] | None = None) -> Outcome:
+        """Start, stop, or report the robot's own unattended collection loop.
+
+        ``action`` is ``start``, ``stop`` or ``status``; the router validates it
+        and the start ``options`` before calling. ``options`` carries ``object``
+        always, and ``hours``, ``cycles``, ``speed`` and ``no_record`` when the
+        caller set them, every value as a string.
+
+        The loop moves the arm. A start is refused unless an operator armed it
+        on the robot itself; ``stop`` and ``status`` are always answered, since
+        stop is the safety path. The robot's own preflight decides whether an
+        armed start may go ahead, and its stop drives the arm home. ``detail["loop"]`` is what
+        the robot reports about its loop, ``detail["warnings"]`` the conditions
+        a start went ahead through, and ``detail["code"]`` the reason a refusal
+        carries. A robot with no collection loop refuses every action.
         """
 
     def stop(self) -> Outcome:

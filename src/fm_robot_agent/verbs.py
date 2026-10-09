@@ -16,6 +16,10 @@ episode queryable uses, for the same reason: the suite runs with no router.
     fm/robot/<ns>/episodes    read    ?dataset=<slug>
     fm/robot/<ns>/session     write   {"action": "get"|"set"|"clear", "dataset": "..."}
                                       the recorder's shared pin, which a headset records into
+    fm/robot/<ns>/collect     write   {"action": "start"|"stop"|"status", "object": "...",
+                                       "hours": h, "cycles": n, "speed": s, "no_record": b}
+                                      the robot's own unattended collection loop, which
+                                      moves the arm; a start needs local arming
 
 Read and write verbs are both queries. Zenoh's put/subscribe pair delivers no
 reply, and every verb here has an answer the caller must see — a refused mode, a
@@ -38,7 +42,7 @@ from fm_robot_agent.protocol import SCHEMA_VERSION, AdapterError, Outcome, Robot
 KEY_PREFIX = "fm/robot"
 
 READ_VERBS = ("status", "episodes")
-WRITE_VERBS = ("up", "down", "config", "mode", "record", "stop", "session")
+WRITE_VERBS = ("up", "down", "config", "mode", "record", "stop", "session", "collect")
 VERBS = READ_VERBS + WRITE_VERBS
 
 RECORD_ACTIONS = ("start", "stop")
@@ -46,6 +50,29 @@ RECORD_ACTIONS = ("start", "stop")
 #: What `session` can be asked to do. `get` sits with the writes for the same
 #: reason config's does: a discovery wildcard has no business reading it.
 SESSION_ACTIONS = ("get", "set", "clear")
+
+#: What `collect` can be asked to do. `status` sits with the writes for the same
+#: reason config's `get` does, and is the default: a bare `collect` only asks.
+COLLECT_ACTIONS = ("start", "stop", "status")
+
+#: Fields only a start carries. Sent with a stop or a status they mean the caller
+#: expected something this action will not do, so they are refused, not dropped.
+COLLECT_START_FIELDS = ("object", "hours", "cycles", "speed", "no_record")
+
+#: An object is a file name under the loop's `config/objects/`, matched against
+#: the pattern the robot-side script enforces, so the two refuse the same names.
+OBJECT_PATTERN = re.compile(r"[a-z0-9_][a-z0-9_-]*")
+OBJECT_MAX_LEN = 32
+
+#: Bounds on one unattended run started from the fabric. 0.5 is the only speed
+#: verified on hardware and 0.1 is the task node's MIN_SPEED_SCALE. Twelve hours
+#: is a working day plus margin, and the cycle ceiling is a typo guard, not a
+#: capacity.
+MIN_COLLECT_SPEED = 0.1
+MAX_COLLECT_SPEED = 0.5
+MIN_COLLECT_HOURS = 0.01
+MAX_COLLECT_HOURS = 12
+MAX_COLLECT_CYCLES = 10_000
 
 #: Ceiling on a stop note. The full take intent lives in tools records.
 MAX_NOTE_LEN = 500
@@ -199,6 +226,69 @@ def _config(key: str, adapter: RobotAdapter, body: dict) -> Reply:
     return _outcome(key, adapter.config_write(config_key, value))
 
 
+def _number(value: object) -> bool:
+    """Whether a JSON value is a number. ``True`` is an int to Python, not here."""
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _decimal(value: float) -> str:
+    """A number as fixed-point text, the only form the robot-side script accepts.
+
+    ``str(0.00001)`` is ``1e-05``, which the script's ``^[0-9]*\\.?[0-9]+$``
+    refuses. Six places is finer than either bound needs.
+    """
+    return f"{value:.6f}".rstrip("0").rstrip(".")
+
+
+def _collect(key: str, adapter: RobotAdapter, body: dict) -> Reply:
+    """Start, stop, or report the robot's own unattended collection loop.
+
+    The fabric never sends a pose, trajectory or command topic. It can start
+    and stop supervised behaviours that move the arm: this loop on the Anvil,
+    only once armed locally, and the Axol's `run-policy`. The robot's preflight
+    decides whether the loop may start, and its stop drives the arm home before
+    it answers. Speed and duration are capped here, below what the script
+    itself allows, because the fabric is a wider audience than the robot's
+    own shell.
+
+    Values reach the adapter as strings, the contract `_mode` holds: the shape
+    is checked here, and what an object name means is the robot's business.
+    """
+    action = body.get("action") or "status"
+    if action not in COLLECT_ACTIONS:
+        return _refuse(key, f"action must be one of {COLLECT_ACTIONS}")
+    if action != "start":
+        if any(name in body for name in COLLECT_START_FIELDS):
+            return _refuse(key, f"{', '.join(COLLECT_START_FIELDS)} belong to a start")
+        return _outcome(key, adapter.collect(action))
+
+    target = body.get("object")
+    if not isinstance(target, str) or len(target) > OBJECT_MAX_LEN or not OBJECT_PATTERN.fullmatch(target):
+        return _refuse(key, f"start needs an object: a config/objects name of at most {OBJECT_MAX_LEN} characters")
+    options = {"object": target}
+    hours = body.get("hours")
+    if hours is not None:
+        if not _number(hours) or not MIN_COLLECT_HOURS <= hours <= MAX_COLLECT_HOURS:
+            return _refuse(key, f"hours must be a number from {MIN_COLLECT_HOURS} to {MAX_COLLECT_HOURS}")
+        options["hours"] = _decimal(hours)
+    cycles = body.get("cycles")
+    if cycles is not None:
+        if not (isinstance(cycles, int) and not isinstance(cycles, bool) and 1 <= cycles <= MAX_COLLECT_CYCLES):
+            return _refuse(key, f"cycles must be a whole number from 1 to {MAX_COLLECT_CYCLES}")
+        options["cycles"] = str(cycles)
+    speed = body.get("speed")
+    if speed is not None:
+        if not _number(speed) or not MIN_COLLECT_SPEED <= speed <= MAX_COLLECT_SPEED:
+            return _refuse(key, f"speed must be a fraction from {MIN_COLLECT_SPEED} to {MAX_COLLECT_SPEED}")
+        options["speed"] = _decimal(speed)
+    no_record = body.get("no_record", False)
+    if not isinstance(no_record, bool):
+        return _refuse(key, "no_record must be true or false")
+    if no_record:
+        options["no_record"] = "true"
+    return _outcome(key, adapter.collect(action, options))
+
+
 def verb_of(key: str, namespace: str) -> str | None:
     """The verb a key names, or ``None`` when the key is not ours.
 
@@ -266,6 +356,9 @@ def answer(
 
         if verb == "mode":
             return _mode(key, adapter, body)
+
+        if verb == "collect":
+            return _collect(key, adapter, body)
 
         if verb == "session":
             action = body.get("action") or "get"
