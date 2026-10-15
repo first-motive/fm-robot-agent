@@ -20,6 +20,14 @@ CHEST_MOUNT = {"parent": "follower_body_link0", "xyz": [0.087781, -0.008784, 0.5
                "rpy": [-2.466778, -0.007809, -1.579296]}
 
 
+@pytest.fixture(autouse=True)
+def armed(tmp_path, monkeypatch):
+    arm = tmp_path / "armed"
+    arm.touch()
+    monkeypatch.setenv("FM_CALIBRATION_ARM_FILE", str(arm))
+    return arm
+
+
 def ask(tmp_path, payload):
     return answer(f"{KEY_PREFIX}/{NS}/calibration", FakeAdapter(), NS,
                   payload=json.dumps(payload).encode(), bundle=DescriptionBundle(tmp_path))
@@ -62,6 +70,10 @@ def test_the_replaced_file_is_kept(tmp_path):
     ({"action": "set", "camera": "cam_chest", "mount": dict(CHEST_MOUNT, parent="a/b")}, "parent"),
     ({"action": "set", "camera": "cam_chest", "mount": dict(CHEST_MOUNT, xyz=[0, 0, 99])}, "xyz"),
     ({"action": "erase"}, "action"),
+    ({"action": "set", "camera": "cam_chest\n", "lens": CHEST_LENS}, "camera"),
+    ({"action": "set", "camera": "cam_chest", "lens": dict(CHEST_LENS, width=1919.5)}, "width"),
+    ({"action": "set", "camera": "cam_chest", "lens": dict(CHEST_LENS, fx=10**400)}, "fx"),
+    ({"action": "set", "camera": "cam_chest", "mount": dict(CHEST_MOUNT, rpy=[0, 0, 7])}, "rpy"),
 ])
 def test_a_bad_write_is_refused_and_named(tmp_path, payload, error):
     reply = ask(tmp_path, payload)
@@ -77,3 +89,38 @@ def test_an_unreadable_file_is_not_served(tmp_path):
 
 def test_a_wildcard_cannot_read_or_write_calibration():
     assert verb_of(f"{KEY_PREFIX}/*/calibration", NS) is None
+
+
+def test_a_write_is_refused_until_armed_on_the_robot(tmp_path, armed):
+    armed.unlink()
+    reply = ask(tmp_path, {"action": "set", "camera": "cam_chest", "lens": CHEST_LENS})
+    assert reply.ok is False and "not armed" in body(reply)["error"]
+
+
+@pytest.mark.parametrize("content", ["null", "5", '"x"', "[]"])
+def test_a_file_that_is_not_an_object_is_skipped(tmp_path, content):
+    ask(tmp_path, {"action": "set", "camera": "cam_chest", "lens": CHEST_LENS})
+    (tmp_path / "calibration" / "cam_waist.json").write_text(content)
+    assert list(body(ask(tmp_path, {"action": "get"}))["cameras"]) == ["cam_chest"]
+
+
+def test_a_write_over_a_broken_file_is_refused_not_merged(tmp_path):
+    (tmp_path / "calibration").mkdir()
+    (tmp_path / "calibration" / "cam_chest.json").write_text('{"lens": {"model": "pinhole"}}')
+    reply = ask(tmp_path, {"action": "set", "camera": "cam_chest", "mount": CHEST_MOUNT})
+    assert reply.ok is False and "does not check out" in body(reply)["error"]
+
+
+def test_a_linked_file_is_not_served(tmp_path, tmp_path_factory):
+    outside = tmp_path_factory.mktemp("outside") / "cam_chest.json"
+    outside.write_text(json.dumps({"lens": CHEST_LENS}))
+    (tmp_path / "calibration").mkdir()
+    (tmp_path / "calibration" / "cam_chest.json").symlink_to(outside)
+    assert body(ask(tmp_path, {"action": "get"}))["cameras"] == {}
+
+
+def test_no_write_leaves_a_temporary_file_behind(tmp_path):
+    ask(tmp_path, {"action": "set", "camera": "cam_chest", "lens": CHEST_LENS})
+    ask(tmp_path, {"action": "set", "camera": "cam_chest", "mount": CHEST_MOUNT})
+    names = sorted(p.name for p in (tmp_path / "calibration").iterdir())
+    assert names == ["cam_chest.json", "cam_chest.json.prev"]

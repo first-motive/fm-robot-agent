@@ -303,6 +303,21 @@ def _collect(key: str, adapter: RobotAdapter, body: dict) -> Reply:
     return _outcome(key, adapter.collect(action, options))
 
 
+def _calibration(key: str, bundle: DescriptionBundle, body: dict) -> Reply:
+    """Read every camera's calibration, or replace one camera's lens or mount."""
+    store = CalibrationStore(bundle.root)
+    action = body.get("action") or "get"
+    if action not in CALIBRATION_ACTIONS:
+        return _refuse(key, f"action must be one of {CALIBRATION_ACTIONS}")
+    if action == "get":
+        return _envelope(key, {"ok": True, "cameras": store.read_all()})
+    camera = body.get("camera")
+    if not isinstance(camera, str):
+        return _refuse(key, "set needs a camera")
+    entry = store.write(camera, lens=body.get("lens"), mount=body.get("mount"))
+    return _envelope(key, {"ok": True, "camera": camera, **entry})
+
+
 def verb_of(key: str, namespace: str) -> str | None:
     """The verb a key names, or ``None`` when the key is not ours.
 
@@ -363,17 +378,7 @@ def answer(
             return Reply(key=key, payload=served.asset(uri), encoding="application/octet-stream")
 
         if verb == "calibration":
-            store = CalibrationStore((bundle or DescriptionBundle()).root)
-            action = body.get("action") or "get"
-            if action not in CALIBRATION_ACTIONS:
-                return _refuse(key, f"action must be one of {CALIBRATION_ACTIONS}")
-            if action == "get":
-                return _envelope(key, {"ok": True, "cameras": store.all()})
-            camera = body.get("camera")
-            if not isinstance(camera, str):
-                return _refuse(key, "set needs a camera")
-            entry = store.set(camera, lens=body.get("lens"), mount=body.get("mount"))
-            return _envelope(key, {"ok": True, "camera": camera, **entry})
+            return _calibration(key, bundle or DescriptionBundle(), body)
 
         if verb == "episodes":
             dataset = (parse_qs(parameters).get("dataset") or [""])[0]

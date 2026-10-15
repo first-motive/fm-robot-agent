@@ -246,9 +246,14 @@ fm/robot/<ns>/calibration   {"action": "get"}                       every camera
                              "lens": {...}, "mount": {...}}          either or both
 ```
 
-A write is checked field by field — model, size, focal lengths, centre inside
-the image, four distortion terms, a link name, a pose within reach — and the
-file it replaces is kept, so a bad calibration is one rename from undone. The
+A write moves what every consumer believes about where a camera is, so it
+needs local consent, as `collect start` does: it is refused unless
+`~/.local/state/fm-robot-agent/calibration-set-enabled` exists on the robot
+(`FM_CALIBRATION_ARM_FILE` points elsewhere). Each write is checked field by
+field — model, whole-number size, focal lengths, centre inside the image, four
+distortion terms, a link name, a pose within ±5 m and ±2π — written atomically
+and durably, logged with its old and new values, and the file it replaces is
+kept, so a bad calibration is one rename from undone. The
 desktop's twin and fm-twin's calibration scores read the same files. Neither
 action answers a wildcard query.
 
