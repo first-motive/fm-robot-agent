@@ -155,6 +155,15 @@ class RobotAdapter(Protocol):
         :func:`task_not_recorded` rather than accepting a sentence it will drop.
         """
 
+    def pose(self, action: str, name: str = "") -> Outcome:
+        """List, plan, or drive the robot's named calibration poses (see `arm_poses`).
+
+        ``action`` is ``list``, ``plan``, ``go`` or ``home``; ``name`` is a pose
+        name for ``plan`` and ``go``. The angles are the robot's own file, never
+        the caller's. ``go`` and ``home`` move the arms: refused unless armed on
+        the robot, and while recording. A robot with no named poses refuses.
+        """
+
     def collect(self, action: str, options: dict[str, str] | None = None) -> Outcome:
         """Start, stop, or report the robot's own unattended collection loop.
 

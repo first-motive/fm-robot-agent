@@ -257,6 +257,46 @@ kept, so a bad calibration is one rename from undone. The
 desktop's twin and fm-twin's calibration scores read the same files. Neither
 action answers a wildcard query.
 
+
+## Calibration Poses
+
+fm-twin computes arm poses that aim both wrist cameras at one board on the table
+(`fm-twin poses`) and screens each one. Staged beside the calibration files,
+
+```
+<bundle>/calibration/poses.json   {"target": [...], "poses": {"board-1": {...}, "home": {...}}}
+```
+
+they are driven by name:
+
+```
+fm/robot/<ns>/pose   {"action": "list"}                    the names
+                     {"action": "plan", "name": "board-1"} how far and how long; nothing moves
+                     {"action": "go",   "name": "board-1"} move both arms there and hold
+                     {"action": "home"}                    back home, arms handed back
+```
+
+The caller sends a name; the angles are this robot's own file, checked joint by
+joint (`follower_[lr]_joint1..7`, finite, within ±3.5 rad), so the fabric still
+sends no joint command. A move:
+
+```
+needs ~/.local/state/fm-robot-agent/pose-move-enabled on the robot (FM_POSE_ARM_FILE)
+is refused while recording · one at a time
+switches both arms to their trajectory controllers · one waypoint each
+is timed so no joint peaks past 0.25 rad/s (1.5× the average, for the cubic one waypoint makes), at least 6 s
+any failure after the switch cancels both goals and hands the arms back; the reply says where they are
+runs inside a 70 s budget: the wait and the measures get only what is left, the switch (10 s)
+  and each goal send (5 s) are fixed and fit inside it, and 20 s is kept to cancel and hand back;
+  the container stops its process at 80 s as a backstop, before the agent lets the lock go
+home: switches back to the forward controllers, seeded with the measured joints
+```
+
+`pose_move.py` does the moving, run inside the loader's ros2 container where
+rclpy is. Between `go` and `home` the arms hold on their trajectory controllers,
+so teleop and the policy do not drive them; `home` gives them back. `stop`
+pauses the hardware as always.
+
 ## Status
 
 This repo was seeded from the HTTP agent running on the Anvil workcell devbox,

@@ -368,6 +368,9 @@ class AxolAdapter:
         """The Axol records by operation, with no shared session a headset could pin."""
         return Outcome(ok=False, message="the Axol has no shared recording session to pin")
 
+    def pose(self, action: str, name: str = "") -> Outcome:
+        return Outcome(ok=False, message="the Axol has no calibration poses")
+
     def collect(self, action: str, options: dict[str, str] | None = None) -> Outcome:
         """The Axol records by operation; the unattended loop exists only on the Anvil."""
         return Outcome(ok=False, message="the Axol has no collection loop")
