@@ -30,7 +30,7 @@ decides its guard:
 | `severing` | Written, restarted, verified against the robot's own telemetry, reverted if it does not come back |
 | `motion` | Refused unless the robot reports itself idle |
 | `tuning` | Written through |
-| `mode` | Validated against what the robot actually offers |
+| `mode` | Validated against what the robot actually offers: on the Anvil, its own `openarm_v2_*.yaml` configs only, though the loader also ships OpenArm v1 and OpenYAM ones. A robot left on another arm's config reports it as its mode, but cannot be set to it again |
 | `unknown` | Readable, never writable |
 
 An unclassified key is never written because `.env.config` is an `env_file` for a

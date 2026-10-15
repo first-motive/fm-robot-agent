@@ -200,6 +200,37 @@ def test_the_mode_list_comes_from_the_real_config_directory(adapter):
     ]
 
 
+@pytest.fixture
+def every_arm(loader):
+    """The loader's config directory as it really is: every arm Anvil supports."""
+    for name in ("openarm_leader_only.yaml", "openarm_quest_teleop.yaml",
+                 "openyam_leader_only.yaml", "openyam_quest_teleop_single_left.yaml"):
+        (loader / "config" / name).write_text("", encoding="utf-8")
+
+
+def test_only_the_openarm_v2_configs_are_offered(adapter, every_arm):
+    assert adapter.list_configs() == ["openarm_v2_leader_only.yaml", "openarm_v2_quest_teleop.yaml"]
+    assert adapter.status()["modes"] == adapter.list_configs()
+
+
+@pytest.mark.parametrize("other", ["openarm_leader_only.yaml", "openyam_leader_only.yaml"])
+def test_another_arms_config_is_refused_though_it_is_on_disk(adapter, every_arm, other):
+    outcome = adapter.set_mode(other)
+    assert outcome.ok is False
+    assert adapter.read_mode() == "openarm_v2_leader_only.yaml" and adapter.launched == []
+
+
+def test_a_robot_left_on_another_arms_config_says_so_and_cannot_be_kept_there(adapter, loader, every_arm):
+    # The truth is reported, so the operator sees what is running; it is not
+    # offered, and writing it again is refused, so the only way on is to v2.
+    env = loader / ".env.config"
+    env.write_text(env.read_text().replace("openarm_v2_leader_only.yaml", "openyam_leader_only.yaml"))
+    reported = adapter.status()
+    assert reported["mode"] == "openyam_leader_only.yaml"
+    assert "openyam_leader_only.yaml" not in reported["modes"]
+    assert adapter.set_mode("openyam_leader_only.yaml").ok is False
+
+
 def test_a_mode_not_in_the_config_directory_is_refused(adapter):
     outcome = adapter.set_mode("openarm_v2_quest_teleop.yaml.evil")
     assert outcome.ok is False

@@ -69,6 +69,11 @@ from fm_robot_agent.protocol import AdapterError, Outcome, task_not_recorded
 from fm_robot_agent.trpc import TrpcClient
 
 KIND = "anvil-openarm-v2"
+#: The loader's config directory holds every arm Anvil supports — OpenArm v1,
+#: OpenArm v2, OpenYAM — side by side. This workcell is an OpenArm v2, and a
+#: config for another arm drives hardware it does not have, so only these are
+#: offered, reported, or accepted.
+CONFIG_PREFIX = "openarm_v2_"
 
 MODE_KEY = "ARMS_CONTROL_CONFIG_FILE"
 COMPOSE_LOG = Path("/tmp/fm-robot-agent-compose.log")
@@ -1059,8 +1064,10 @@ class AnvilAdapter:
     # --- mode ----------------------------------------------------------------
 
     def list_configs(self) -> list[str]:
+        """The configs this robot can run: its own arm's, never another's."""
         try:
-            return sorted(f.name for f in self.config_dir.iterdir() if f.suffix == ".yaml")
+            return sorted(f.name for f in self.config_dir.iterdir()
+                          if f.suffix == ".yaml" and f.name.startswith(CONFIG_PREFIX))
         except OSError:
             return []
 
