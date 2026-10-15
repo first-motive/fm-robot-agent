@@ -22,6 +22,8 @@ episode queryable uses, for the same reason: the suite runs with no router.
                                       moves the arm; a start needs local arming
     fm/robot/<ns>/description read    the URDF, as text (see description.py)
     fm/robot/<ns>/asset       read    ?uri=<package://...>, one mesh, as bytes
+    fm/robot/<ns>/calibration write   {"action": "get"|"set", "camera": ..., "lens": ..., "mount": ...}
+                                      every camera's lens and mount (see calibration.py)
 
 Read and write verbs are both queries. Zenoh's put/subscribe pair delivers no
 reply, and every verb here has an answer the caller must see — a refused mode, a
@@ -36,6 +38,7 @@ import re
 from dataclasses import dataclass
 from urllib.parse import parse_qs
 
+from fm_robot_agent.calibration import CalibrationStore
 from fm_robot_agent.description import DescriptionBundle
 from fm_robot_agent.protocol import SCHEMA_VERSION, AdapterError, Outcome, RobotAdapter
 
@@ -48,7 +51,11 @@ READ_VERBS = ("status", "episodes")
 #: Reads a caller must name a robot for. A wildcard over these would pull every
 #: robot's URDF or meshes in one query, which no discovery needs.
 NAMED_READS = ("description", "asset")
-WRITE_VERBS = ("up", "down", "config", "mode", "record", "stop", "session", "collect")
+WRITE_VERBS = ("up", "down", "config", "mode", "record", "stop", "session", "collect", "calibration")
+
+#: What `calibration` can be asked to do. `get` sits with the writes for the
+#: reason config's does: a discovery wildcard has no business reading it.
+CALIBRATION_ACTIONS = ("get", "set")
 VERBS = READ_VERBS + NAMED_READS + WRITE_VERBS
 
 RECORD_ACTIONS = ("start", "stop")
@@ -354,6 +361,19 @@ def answer(
             if not uri:
                 return _refuse(key, "asset needs a uri")
             return Reply(key=key, payload=served.asset(uri), encoding="application/octet-stream")
+
+        if verb == "calibration":
+            store = CalibrationStore((bundle or DescriptionBundle()).root)
+            action = body.get("action") or "get"
+            if action not in CALIBRATION_ACTIONS:
+                return _refuse(key, f"action must be one of {CALIBRATION_ACTIONS}")
+            if action == "get":
+                return _envelope(key, {"ok": True, "cameras": store.all()})
+            camera = body.get("camera")
+            if not isinstance(camera, str):
+                return _refuse(key, "set needs a camera")
+            entry = store.set(camera, lens=body.get("lens"), mount=body.get("mount"))
+            return _envelope(key, {"ok": True, "camera": camera, **entry})
 
         if verb == "episodes":
             dataset = (parse_qs(parameters).get("dataset") or [""])[0]

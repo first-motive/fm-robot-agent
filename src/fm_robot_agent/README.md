@@ -77,6 +77,7 @@ robot.
 | `config.py` | what a configuration key is: its class, its journal, env-file reads and writes |
 | `verbs.py` | key → adapter call → reply, as one pure function |
 | `description.py` | the staged URDF and meshes `description` and `asset` serve, fenced to their bundle |
+| `calibration.py` | each camera's lens and mount, checked on write, the replaced file kept |
 | `card.py` | this host's identity card: name, namespace, robot kind |
 | `env.py` | the router endpoint, from the environment or `/etc/fm-comms.env` |
 | `anvil.py` | the Anvil workcell: compose, the webapp's tRPC lane, ros2 services, the collection loop's script |
