@@ -403,3 +403,24 @@ def test_collect_refuses_a_malformed_request(robot, payload):
     reply = ask(robot, "collect", payload=payload)
     assert reply.ok is False
     assert robot.collecting is None
+
+
+def test_pose_lists_by_default(robot):
+    reported = body(ask(robot, "pose"))
+    assert reported["ok"] is True and reported["poses"] == ["board-1", "home"]
+
+
+@pytest.mark.parametrize("payload", [
+    {"action": "go"},
+    {"action": "go", "name": "../etc"},
+    {"action": "plan", "name": 7},
+    {"action": "home", "name": "board-1"},
+    {"action": "fly"},
+])
+def test_pose_refuses_a_malformed_request(robot, payload):
+    assert body(ask(robot, "pose", payload=payload))["ok"] is False
+
+
+def test_pose_go_names_a_pose_and_nothing_more(robot):
+    assert body(ask(robot, "pose", payload={"action": "go", "name": "board-1"}))["ok"] is True
+    assert robot.posed == ("go", "board-1")

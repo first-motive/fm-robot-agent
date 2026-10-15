@@ -213,6 +213,9 @@ class So101Adapter:
     def session(self, action: str, dataset: str = "") -> Outcome:
         return Outcome(ok=False, message="the SO-101 records by take, with no shared session to pin")
 
+    def pose(self, action: str, name: str = "") -> Outcome:
+        return Outcome(ok=False, message="the SO-101 has no calibration poses")
+
     def collect(self, action: str, options: dict[str, str] | None = None) -> Outcome:
         return Outcome(ok=False, message="the SO-101 has no collection loop")
 

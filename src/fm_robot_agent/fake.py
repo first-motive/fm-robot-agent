@@ -154,6 +154,16 @@ class FakeAdapter:
         self.recording = self.recording_episode = None
         return Outcome(ok=True, message="stopped")
 
+    def pose(self, action: str, name: str = "") -> Outcome:
+        """Two poses, and the last one asked for. Nothing here moves."""
+        if action == "list":
+            return Outcome(ok=True, message="board-1, home", detail={"poses": ["board-1", "home"]})
+        target = "home" if action == "home" else name
+        if target not in ("board-1", "home"):
+            return Outcome(ok=False, message=f"no pose {target!r}")
+        self.posed = (action, target)
+        return Outcome(ok=True, message=f"{action} {target}")
+
     def collect(self, action: str, options: dict[str, str] | None = None) -> Outcome:
         if action == "start":
             if self.collecting is not None:

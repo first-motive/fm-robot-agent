@@ -17,6 +17,10 @@ and the reply into either a line a person reads or the JSON a script does.
     fm robot fm-rob-01 collect start --object can --hours 2    (armed on the robot first)
     fm robot fm-rob-01 collect stop
     fm robot fm-rob-01 collect status
+    fm robot fm-rob-01 pose list                             calibration poses on the robot
+    fm robot fm-rob-01 pose plan board-1                     how far and how long; nothing moves
+    fm robot fm-rob-01 pose go board-1                       move both arms there (armed on the robot first)
+    fm robot fm-rob-01 pose home                             back home, arms handed back
     fm robot list
 
 ``list`` is a wildcard query over ``fm/robot/*/status``: the fabric is the
@@ -57,6 +61,9 @@ CONFIG_TIMEOUT_S = 150.0
 #: A collect stop answers once the arm is home, which the robot's own script
 #: waits up to 180 s for. The adapter gives it 210 s; this outlasts that.
 COLLECT_TIMEOUT_S = 220.0
+
+#: A pose move answers once both arms are there. The adapter gives it 90 s.
+POSE_TIMEOUT_S = 100.0
 
 #: `mode` is not a verb on the wire any more — it is a config write of the one
 #: key each robot spells its own way, kept here because it reads better than
@@ -128,6 +135,11 @@ def build_payload(verb: str, args: argparse.Namespace) -> dict | None:
         body = {"action": args.value or "get"}
         if args.dataset:
             body["dataset"] = args.dataset
+        return body
+    if verb == "pose":
+        body = {"action": args.value or "list"}
+        if args.assignment:
+            body["name"] = args.assignment
         return body
     if verb == "collect":
         body = {"action": args.value or "status"}
@@ -235,9 +247,10 @@ def main(argv: list[str] | None = None) -> int:
         "value",
         nargs="?",
         help=f"mode: the config; record: start | stop; config: {' | '.join(CONFIG_ACTIONS)}; "
-        f"session: {' | '.join(SESSION_ACTIONS)}; collect: {' | '.join(COLLECT_ACTIONS)}",
+        f"session: {' | '.join(SESSION_ACTIONS)}; collect: {' | '.join(COLLECT_ACTIONS)}; "
+        "pose: list | plan NAME | go NAME | home",
     )
-    parser.add_argument("assignment", nargs="?", help="config set: KEY=VALUE")
+    parser.add_argument("assignment", nargs="?", help="config set: KEY=VALUE; pose plan or go: the pose name")
     parser.add_argument(
         "--arg",
         action="append",
@@ -316,7 +329,8 @@ def main(argv: list[str] | None = None) -> int:
             key,
             build_payload(args.verb, args),
             parameters,
-            timeout_s={"config": CONFIG_TIMEOUT_S, "collect": COLLECT_TIMEOUT_S}.get(verb, QUERY_TIMEOUT_S),
+            timeout_s={"config": CONFIG_TIMEOUT_S, "collect": COLLECT_TIMEOUT_S, "pose": POSE_TIMEOUT_S}.get(
+                verb, QUERY_TIMEOUT_S),
         )
 
     if not replies:

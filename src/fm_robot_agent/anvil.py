@@ -41,6 +41,15 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+from fm_robot_agent.arm_poses import (
+    HOME,
+    PROCESS_DEADLINE_S,
+    PoseBook,
+    move_refusal,
+    move_request,
+    move_script,
+)
+from fm_robot_agent.arm_poses import arm_file as pose_arm_file
 from fm_robot_agent.config import (
     MODE,
     MODE_ALIAS,
@@ -55,6 +64,7 @@ from fm_robot_agent.config import (
     env_values,
     restore,
 )
+from fm_robot_agent.description import DescriptionBundle
 from fm_robot_agent.protocol import AdapterError, Outcome, task_not_recorded
 from fm_robot_agent.trpc import TrpcClient
 
@@ -192,6 +202,9 @@ WORKSPACE_SETUP = os.environ.get("FM_ANVIL_ROS_OVERLAY", "/workspace/install/set
 RMW = os.environ.get("FM_ANVIL_RMW", "rmw_cyclonedds_cpp")
 
 SERVICE_TIMEOUT_S = 15
+#: A pose move: the slowest joint at its speed cap over the largest swing an
+#: Anvil joint has, plus switching the controllers both ways.
+POSE_TIMEOUT_S = 90
 COMPOSE_TIMEOUT_S = 30
 
 #: The host's own memory accounting. The agent runs outside the containers, so
@@ -256,6 +269,7 @@ class AnvilAdapter:
         )
         self.collect_arm = collect_arm or COLLECT_ARM_FILE
         self._collect_lock = threading.Lock()
+        self._pose_lock = threading.Lock()
         self.config_dir = self.loader_dir / "config"
         self.env_config = self.loader_dir / ".env.config"
         self.recordings_dir = self.loader_dir / "data" / "recordings"
@@ -488,6 +502,60 @@ class AnvilAdapter:
             "{state: pause}",
         )
         return Outcome(ok=True, message="hardware paused", detail={"state": "pause"})
+
+    def pose(self, action: str, name: str = "") -> Outcome:
+        """Drive both arms to one of this robot's calibration poses, slowly.
+
+        The pose is read from the bundle on this host and moved to by
+        `pose_move.py` inside the ros2 container. One pose call at a time, and a
+        move holds the collect lock too, so the loop cannot start mid-move. The
+        guards run once both locks are held: armed here, not recording, the loop
+        not running, each refusing when its state is unknown.
+        """
+        book = PoseBook(DescriptionBundle().root)
+        if action == "list":
+            names = sorted(book.read())
+            return Outcome(ok=True, message=", ".join(names), detail={"poses": names})
+        target = book.pose(HOME if action == "home" else name)
+        moving = action in ("go", "home")
+        if not self._pose_lock.acquire(blocking=False):
+            return Outcome(ok=False, message="busy: another pose call is still running", detail={"code": "busy"})
+        try:
+            if not moving:
+                return self._pose_move(move_request(target, hand_back=False, plan=True), SERVICE_TIMEOUT_S * 2)
+            if not self._collect_lock.acquire(blocking=False):
+                return Outcome(ok=False, message="busy: a collect call is running", detail={"code": "busy"})
+            try:
+                refusal = move_refusal(pose_arm_file().is_file(), self._is_recording(), self._collect_running())
+                if refusal:
+                    return Outcome(ok=False, message=refusal[1], detail={"code": refusal[0]})
+                return self._pose_move(move_request(target, hand_back=action == "home", plan=False), POSE_TIMEOUT_S)
+            finally:
+                self._collect_lock.release()
+        finally:
+            self._pose_lock.release()
+
+    def _collect_running(self) -> bool | None:
+        """Whether the collection loop is running: False with no checkout to run
+        one, None when its script cannot say."""
+        if not (self.embodied_ai_dir / COLLECT_SCRIPT).is_file():
+            return False
+        try:
+            loop = self._run_collect("status", {}).detail.get("loop") or {}
+        except AdapterError:
+            return None
+        active = loop.get("active")
+        return active if isinstance(active, bool) else None
+
+    def _pose_move(self, request: str, timeout_s: float) -> Outcome:
+        output = self._ros_python(move_script(), request, "pose move", timeout_s, PROCESS_DEADLINE_S)
+        try:
+            reply = json.loads(output.strip().splitlines()[-1])
+        except (IndexError, json.JSONDecodeError):
+            print(f"fm-robot-agent: pose move: {output}", file=sys.stderr, flush=True)
+            raise AdapterError("the pose move did not answer as expected") from None
+        detail = {k: v for k, v in reply.items() if k in ("duration_s", "moves", "error_rad", "handed_back")}
+        return Outcome(ok=reply.get("ok") is True, message=str(reply.get("message", ""))[:300], detail=detail)
 
     def collect(self, action: str, options: dict[str, str] | None = None) -> Outcome:
         """Start, stop, or report the loop through anvil-embodied-ai's own script.
@@ -1126,6 +1194,31 @@ class AnvilAdapter:
             raise AdapterError(f"{what} did not answer: {exc}") from exc
         if result.returncode != 0:
             raise AdapterError(f"{what} failed: {result.stderr.strip() or 'no output'}")
+        return result.stdout
+
+    def _ros_python(self, script: str, argument: str, what: str, timeout_s: float, deadline_s: int) -> str:
+        """Run a Python script inside the ros2 container with one argument, the
+        script on stdin. Both are this module's own: the script ships with the
+        agent and the argument is built from the robot's own pose file.
+
+        `deadline_s` stops the process inside the container, under `timeout_s`:
+        a timeout here kills only the local `docker compose exec`, not the
+        process it started."""
+        inner = (
+            f"source {ROS_SETUP} && source {shlex.quote(WORKSPACE_SETUP)} && "
+            f"RMW_IMPLEMENTATION={shlex.quote(RMW)} timeout {int(deadline_s)} python3 - {shlex.quote(argument)}"
+        )
+        try:
+            result = subprocess.run(
+                ["docker", "compose", "exec", "-T", "ros2", "bash", "-c", inner],
+                cwd=self.loader_dir, input=script, capture_output=True, text=True,
+                timeout=timeout_s, check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise AdapterError(f"{what} did not answer: {exc}") from exc
+        if result.returncode != 0:
+            print(f"fm-robot-agent: {what}: {result.stderr.strip()}", file=sys.stderr, flush=True)
+            raise AdapterError(f"{what} failed (exit {result.returncode})")
         return result.stdout
 
     def _service_call(self, service: str, service_type: str, request: str) -> str:

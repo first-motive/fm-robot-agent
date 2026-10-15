@@ -38,6 +38,7 @@ import re
 from dataclasses import dataclass
 from urllib.parse import parse_qs
 
+from fm_robot_agent.arm_poses import POSE_NAME
 from fm_robot_agent.calibration import CalibrationStore
 from fm_robot_agent.description import DescriptionBundle
 from fm_robot_agent.protocol import SCHEMA_VERSION, AdapterError, Outcome, RobotAdapter
@@ -51,11 +52,14 @@ READ_VERBS = ("status", "episodes")
 #: Reads a caller must name a robot for. A wildcard over these would pull every
 #: robot's URDF or meshes in one query, which no discovery needs.
 NAMED_READS = ("description", "asset")
-WRITE_VERBS = ("up", "down", "config", "mode", "record", "stop", "session", "collect", "calibration")
+WRITE_VERBS = ("up", "down", "config", "mode", "record", "stop", "session", "collect", "calibration", "pose")
 
 #: What `calibration` can be asked to do. `get` sits with the writes for the
 #: reason config's does: a discovery wildcard has no business reading it.
 CALIBRATION_ACTIONS = ("get", "set")
+#: What `pose` can be asked to do. `list` and `plan` move nothing; `go` and
+#: `home` move both arms, armed on the robot itself.
+POSE_ACTIONS = ("list", "plan", "go", "home")
 VERBS = READ_VERBS + NAMED_READS + WRITE_VERBS
 
 RECORD_ACTIONS = ("start", "stop")
@@ -303,6 +307,24 @@ def _collect(key: str, adapter: RobotAdapter, body: dict) -> Reply:
     return _outcome(key, adapter.collect(action, options))
 
 
+def _pose(key: str, adapter: RobotAdapter, body: dict) -> Reply:
+    """List, plan, or drive the robot's named calibration poses.
+
+    The caller names a pose and nothing more: the angles are the robot's own
+    file, so this verb is no exception to the fabric sending no joint command.
+    """
+    action = body.get("action") or "list"
+    if action not in POSE_ACTIONS:
+        return _refuse(key, f"action must be one of {POSE_ACTIONS}")
+    name = body.get("name", "")
+    if action in ("plan", "go"):
+        if not isinstance(name, str) or not POSE_NAME.fullmatch(name):
+            return _refuse(key, f"{action} needs a pose name; list them with action list")
+    elif name:
+        return _refuse(key, f"{action} takes no pose name")
+    return _outcome(key, adapter.pose(action, name))
+
+
 def _calibration(key: str, bundle: DescriptionBundle, body: dict) -> Reply:
     """Read every camera's calibration, or replace one camera's lens or mount."""
     store = CalibrationStore(bundle.root)
@@ -403,6 +425,8 @@ def answer(
 
         if verb == "collect":
             return _collect(key, adapter, body)
+        if verb == "pose":
+            return _pose(key, adapter, body)
 
         if verb == "session":
             action = body.get("action") or "get"
