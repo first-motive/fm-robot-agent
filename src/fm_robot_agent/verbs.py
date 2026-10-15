@@ -20,6 +20,8 @@ episode queryable uses, for the same reason: the suite runs with no router.
                                        "hours": h, "cycles": n, "speed": s, "no_record": b}
                                       the robot's own unattended collection loop, which
                                       moves the arm; a start needs local arming
+    fm/robot/<ns>/description read    the URDF, as text (see description.py)
+    fm/robot/<ns>/asset       read    ?uri=<package://...>, one mesh, as bytes
 
 Read and write verbs are both queries. Zenoh's put/subscribe pair delivers no
 reply, and every verb here has an answer the caller must see — a refused mode, a
@@ -34,6 +36,7 @@ import re
 from dataclasses import dataclass
 from urllib.parse import parse_qs
 
+from fm_robot_agent.description import DescriptionBundle
 from fm_robot_agent.protocol import SCHEMA_VERSION, AdapterError, Outcome, RobotAdapter
 
 #: Every key this agent answers sits under here. The namespace segment keeps two
@@ -42,8 +45,11 @@ from fm_robot_agent.protocol import SCHEMA_VERSION, AdapterError, Outcome, Robot
 KEY_PREFIX = "fm/robot"
 
 READ_VERBS = ("status", "episodes")
+#: Reads a caller must name a robot for. A wildcard over these would pull every
+#: robot's URDF or meshes in one query, which no discovery needs.
+NAMED_READS = ("description", "asset")
 WRITE_VERBS = ("up", "down", "config", "mode", "record", "stop", "session", "collect")
-VERBS = READ_VERBS + WRITE_VERBS
+VERBS = READ_VERBS + NAMED_READS + WRITE_VERBS
 
 RECORD_ACTIONS = ("start", "stop")
 
@@ -321,6 +327,7 @@ def answer(
     *,
     parameters: str = "",
     payload: bytes | None = None,
+    bundle: DescriptionBundle | None = None,
 ) -> Reply:
     """Route one query to its adapter call and return the reply to send."""
     verb = verb_of(key, namespace)
@@ -336,6 +343,17 @@ def answer(
     try:
         if verb == "status":
             return _envelope(key, {"ok": True, "kind": adapter.kind, **adapter.status()})
+
+        # The description and its meshes go out as they are, not in the JSON
+        # envelope: a URDF is the text a visualiser parses, and a mesh is bytes.
+        if verb in NAMED_READS:
+            served = bundle or DescriptionBundle()
+            if verb == "description":
+                return Reply(key=key, payload=served.urdf(), encoding="text/xml")
+            uri = (parse_qs(parameters).get("uri") or [""])[0]
+            if not uri:
+                return _refuse(key, "asset needs a uri")
+            return Reply(key=key, payload=served.asset(uri), encoding="application/octet-stream")
 
         if verb == "episodes":
             dataset = (parse_qs(parameters).get("dataset") or [""])[0]

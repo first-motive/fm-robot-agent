@@ -9,6 +9,7 @@ verb set over Zenoh:
 
 ```
 status · up · down · config · record · stop · episodes · session · collect
+description · asset
 ```
 
 Every byte reaches the fleet through the Zenoh router on 7447, so a robot is
@@ -180,6 +181,54 @@ session (the webapp's Diagnostics → Save Buffer), set
 - `capture.quest_metrics`: the headset's live controller rates. The
   controller-tracking entries in `capture.quest` are start-up checks; they stay
   failed while teleop works.
+
+## Robot Description
+
+The desktop draws each robot in 3D from its URDF, posed by its `joint_states`.
+Two read verbs serve what a visualiser needs:
+
+```
+fm/robot/<ns>/description     the URDF, as text
+fm/robot/<ns>/asset?uri=...   one mesh the URDF names (.stl, .dae, .obj), as bytes
+```
+
+Both read a bundle staged once on the robot's host, at
+`~/.local/share/fm-robot-agent/description` unless `FM_ROBOT_DESCRIPTION_DIR`
+points elsewhere:
+
+```
+<bundle>/robot.urdf
+<bundle>/packages/<package>/<path>    what package://<package>/<path> names
+<bundle>/<path>                       what a plain relative <path> names
+```
+
+An asset URI is resolved inside the bundle and refused if it leaves it, names
+anything but a mesh, or exceeds 32 MB. Neither verb answers a wildcard query.
+Without a bundle both refuse, and the desktop falls back to its own workspace
+copy and says so.
+
+Stage the bundle from the same files the fm visualiser
+(`fm_description/view_robot.launch.py`) reads:
+
+```bash
+B=~/.local/share/fm-robot-agent/description
+mkdir -p "$B/packages"
+
+# Anvil, from Anvil's CAD package (openarm_v2_bimanual, received 2026-10-13).
+# The loader's /robot_description draws the stock OpenArm hand; this package
+# draws the Anvil gripper the workcell carries. Its mesh paths are relative.
+cp openarm_v2_bimanual/openarm_v2_bimanual.urdf "$B/robot.urdf"
+cp -r openarm_v2_bimanual/arms openarm_v2_bimanual/grippers "$B/"
+
+# Axol, from the axol checkout's almond_axol/kinematics/urdf.
+cp axol.urdf "$B/robot.urdf"
+mkdir -p "$B/packages/assembly" && cp -r meshes "$B/packages/assembly/"
+
+# SO-101, on its host, from so_arm/Simulation/SO101.
+cp so101_new_calib.urdf "$B/robot.urdf" && cp -r assets "$B/"
+```
+
+Restage when the robot's hardware or its vendor's description changes.
 
 ## Status
 

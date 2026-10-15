@@ -18,6 +18,7 @@ flowchart LR
     R --> S[service.py<br/>Zenoh session]
     S -->|key + payload| V[verbs.py<br/>pure router]
     V --> A[RobotAdapter]
+    V --> B[description.py<br/>staged URDF + meshes]
     A --> AN[anvil adapter<br/>docker compose + tRPC<br/>tactile-collect.sh]
     A --> AX[axol adapter<br/>https://localhost:8001]
     AX -->|CDR JointState| P[publisher<br/>ns/joint_states] --> R
@@ -75,6 +76,7 @@ robot.
 | `protocol.py` | `RobotAdapter`, `Outcome`, the schema version every reply carries |
 | `config.py` | what a configuration key is: its class, its journal, env-file reads and writes |
 | `verbs.py` | key → adapter call → reply, as one pure function |
+| `description.py` | the staged URDF and meshes `description` and `asset` serve, fenced to their bundle |
 | `card.py` | this host's identity card: name, namespace, robot kind |
 | `env.py` | the router endpoint, from the environment or `/etc/fm-comms.env` |
 | `anvil.py` | the Anvil workcell: compose, the webapp's tRPC lane, ros2 services, the collection loop's script |
