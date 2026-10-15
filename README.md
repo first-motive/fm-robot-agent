@@ -9,7 +9,7 @@ verb set over Zenoh:
 
 ```
 status · up · down · config · record · stop · episodes · session · collect
-description · asset
+description · asset · calibration
 ```
 
 Every byte reaches the fleet through the Zenoh router on 7447, so a robot is
@@ -229,6 +229,33 @@ cp so101_new_calib.urdf "$B/robot.urdf" && cp -r assets "$B/"
 ```
 
 Restage when the robot's hardware or its vendor's description changes.
+
+## Camera Calibration
+
+Each camera's lens (OpenCV fisheye intrinsics) and mount (its optical frame's pose
+on a link) live beside the description bundle, one JSON file per camera:
+
+```
+<bundle>/calibration/cam_chest.json        {"lens": {...}, "mount": {...}}
+<bundle>/calibration/cam_chest.json.prev   the file the last write replaced
+```
+
+```
+fm/robot/<ns>/calibration   {"action": "get"}                       every camera
+                            {"action": "set", "camera": "cam_chest",
+                             "lens": {...}, "mount": {...}}          either or both
+```
+
+A write moves what every consumer believes about where a camera is, so it
+needs local consent, as `collect start` does: it is refused unless
+`~/.local/state/fm-robot-agent/calibration-set-enabled` exists on the robot
+(`FM_CALIBRATION_ARM_FILE` points elsewhere). Each write is checked field by
+field — model, whole-number size, focal lengths, centre inside the image, four
+distortion terms, a link name, a pose within ±5 m and ±2π — written atomically
+and durably, logged with its old and new values, and the file it replaces is
+kept, so a bad calibration is one rename from undone. The
+desktop's twin and fm-twin's calibration scores read the same files. Neither
+action answers a wildcard query.
 
 ## Status
 

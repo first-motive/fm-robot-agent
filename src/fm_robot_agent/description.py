@@ -64,7 +64,7 @@ def bundle_dir() -> Path:
     return Path.home() / ".local" / "share" / "fm-robot-agent" / "description"
 
 
-def _read_bounded(path: Path, limit: int, name: str) -> bytes:
+def read_bounded(path: Path, limit: int, name: str) -> bytes:
     """Read at most ``limit`` bytes in one open, so a file that grows after it
     was found cannot be read past the ceiling."""
     try:
@@ -88,7 +88,7 @@ class DescriptionBundle:
         path = self._inside(Path(URDF_NAME))
         if path is None:
             raise AdapterError(f"no description staged: {URDF_NAME} is missing from the bundle")
-        return _read_bounded(path, MAX_URDF_BYTES, URDF_NAME)
+        return read_bounded(path, MAX_URDF_BYTES, URDF_NAME)
 
     def asset(self, uri: str) -> bytes:
         """The mesh a URDF URI names, or raise when it is not one this bundle serves."""
@@ -98,7 +98,7 @@ class DescriptionBundle:
         if not _asset_slots.acquire(blocking=False):
             raise AdapterError("busy serving other assets; ask again")
         try:
-            return _read_bounded(path, MAX_ASSET_BYTES, f"asset {uri!r}")
+            return read_bounded(path, MAX_ASSET_BYTES, f"asset {uri!r}")
         finally:
             _asset_slots.release()
 
