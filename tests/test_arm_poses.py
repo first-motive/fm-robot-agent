@@ -305,3 +305,68 @@ def test_a_hand_back_with_no_fresh_measure_seeds_where_the_arms_last_were():
     c.measure = lambda names, timeout_s: next(measures, None)
     reply = pose_move.Mover(c).run(GOAL)
     assert reply["handed_back"] and ("seed", "l") in c.calls
+
+
+def test_a_switch_asks_only_for_what_is_still_to_change():
+    # Holding at a pose: the trajectory controllers are already on.
+    holding = {"follower_l_jtc": "active", "follower_r_jtc": "active",
+               "follower_l_forward_position_controller": "inactive",
+               "follower_r_forward_position_controller": "inactive"}
+    jtcs = ["follower_l_jtc", "follower_r_jtc"]
+    forwards = ["follower_l_forward_position_controller", "follower_r_forward_position_controller"]
+    assert pose_move.switch_needed(holding, jtcs, forwards) == ([], [])
+    assert pose_move.switch_needed(holding, forwards, jtcs) == (forwards, jtcs)
+    mixed = {**holding, "follower_r_jtc": "inactive"}
+    assert pose_move.switch_needed(mixed, jtcs, forwards) == (["follower_r_jtc"], [])
+
+
+JTCS = ["follower_l_jtc", "follower_r_jtc"]
+FORWARDS = ["follower_l_forward_position_controller", "follower_r_forward_position_controller"]
+STREAMING = {**{c: "inactive" for c in JTCS}, **{c: "active" for c in FORWARDS}}
+HOLDING = {**{c: "active" for c in JTCS}, **{c: "inactive" for c in FORWARDS}}
+
+
+class Manager:
+    """Stands in for the controller manager: states, and switches that may be refused or not take."""
+
+    def __init__(self, states, agree=True, take=True):
+        self.states = dict(states) if states is not None else None
+        self.agree, self.take, self.requests = agree, take, []
+
+    def read(self):
+        return dict(self.states) if self.states is not None else None
+
+    def request(self, on, off):
+        self.requests.append((on, off))
+        if self.agree and self.take:
+            self.states.update({c: "active" for c in on} | {c: "inactive" for c in off})
+        return self.agree
+
+
+def test_a_switch_from_streaming_to_trajectory_is_requested_and_confirmed():
+    m = Manager(STREAMING)
+    assert pose_move.switch_controllers(m.read, m.request, JTCS, FORWARDS)
+    assert m.requests == [(JTCS, FORWARDS)] and m.states == HOLDING
+
+
+def test_nothing_is_requested_when_the_arms_are_already_there():
+    m = Manager(HOLDING)
+    assert pose_move.switch_controllers(m.read, m.request, JTCS, FORWARDS) and m.requests == []
+
+
+def test_a_refused_switch_fails():
+    assert not pose_move.switch_controllers(*_manager(STREAMING, agree=False), JTCS, FORWARDS)
+
+
+def test_a_switch_the_manager_agreed_to_but_did_not_make_fails():
+    assert not pose_move.switch_controllers(*_manager(STREAMING, take=False), JTCS, FORWARDS)
+
+
+def test_unreadable_states_fail_without_a_request():
+    m = Manager(None)
+    assert not pose_move.switch_controllers(m.read, m.request, JTCS, FORWARDS) and m.requests == []
+
+
+def _manager(states, **kwargs):
+    m = Manager(states, **kwargs)
+    return m.read, m.request

@@ -44,6 +44,38 @@ def joints_of(side: str) -> list[str]:
     return [f"follower_{side}_joint{i}" for i in range(1, 8)] + [f"follower_{side}_finger_joint1"]
 
 
+def switch_needed(states: dict[str, str], activate: list[str], deactivate: list[str]) -> tuple[list[str], list[str]]:
+    """Only the changes still to make: a controller already active is not
+    activated again, nor an inactive one deactivated. A strict switch refuses
+    either, so asking for them fails every move after the first."""
+    return ([c for c in activate if states.get(c) != "active"],
+            [c for c in deactivate if states.get(c) == "active"])
+
+
+def switch_controllers(read_states, request, activate: list[str], deactivate: list[str]) -> bool:
+    """Bring the controllers to the wanted states, asking only for what is still
+    to change, and confirm they got there.
+
+    `read_states()` gives each controller's state, or None; `request(on, off)`
+    asks the controller manager for a strict switch and says whether it agreed.
+    tradeoff: a controller mid-transition ("activating", "deactivating") reads as
+    not active; the move then asks again and a strict switch may refuse, which
+    fails the move with nothing moved rather than guessing.
+    """
+    before = read_states()
+    if before is None:
+        return False
+    on, off = switch_needed(before, activate, deactivate)
+    if not on and not off:
+        return True
+    if not request(on, off):
+        return False
+    # The manager's ok says it accepted the request, not that every controller
+    # reached its state, so the states are read again.
+    after = read_states() or {}
+    return all(after.get(c) == "active" for c in on) and all(after.get(c) != "active" for c in off)
+
+
 def plan(targets: dict[str, float], measured: dict[str, float], max_speed: float, min_s: float) -> float:
     """How long the move takes: long enough that the fastest joint's peak speed
     stays at max_speed, and never under min_s."""
@@ -167,7 +199,7 @@ class RosControllers:
     def __init__(self) -> None:
         import rclpy
         from control_msgs.action import FollowJointTrajectory
-        from controller_manager_msgs.srv import SwitchController
+        from controller_manager_msgs.srv import ListControllers, SwitchController
         from rclpy.action import ActionClient
         from sensor_msgs.msg import JointState
         from std_msgs.msg import Float64MultiArray
@@ -175,12 +207,14 @@ class RosControllers:
         self.rclpy = rclpy
         self.FollowJointTrajectory = FollowJointTrajectory
         self.SwitchController = SwitchController
+        self.ListControllers = ListControllers
         self.Float64MultiArray = Float64MultiArray
         rclpy.init()
         self.node = rclpy.create_node("fm_robot_agent_pose")
         self.joints: dict[str, float] = {}
         self.node.create_subscription(JointState, "/joint_states", self._on_joints, 10)
         self.switcher = self.node.create_client(SwitchController, "/controller_manager/switch_controller")
+        self.lister = self.node.create_client(ListControllers, "/controller_manager/list_controllers")
         self.clients = {side: ActionClient(self.node, FollowJointTrajectory, f"/{arm['jtc']}/follow_joint_trajectory")
                         for side, arm in ARMS.items()}
         self.publishers = {side: self.node.create_publisher(Float64MultiArray, f"/{arm['forward']}/commands", 10)
@@ -206,7 +240,16 @@ class RosControllers:
         return self.switcher.wait_for_service(timeout_sec=timeout_s) and all(
             client.wait_for_server(timeout_sec=timeout_s) for client in self.clients.values())
 
+    def states(self) -> dict[str, str] | None:
+        future = self.lister.call_async(self.ListControllers.Request())
+        if not self._spin_until(future.done, 5.0) or future.result() is None:
+            return None
+        return {c.name: c.state for c in future.result().controller}
+
     def switch(self, activate, deactivate):
+        return switch_controllers(self.states, self._request_switch, activate, deactivate)
+
+    def _request_switch(self, activate, deactivate) -> bool:
         request = self.SwitchController.Request(activate_controllers=activate, deactivate_controllers=deactivate,
                                                 strictness=self.SwitchController.Request.STRICT, activate_asap=True)
         future = self.switcher.call_async(request)
