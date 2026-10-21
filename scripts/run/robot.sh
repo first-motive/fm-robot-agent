@@ -14,13 +14,15 @@
 #   fm robot fm-rob-01 collect status
 #   fm robot fm-rob-01 stop
 #   fm robot host fm-rob-03                          host a computer-less robot (SO-101) here
+#   fm robot stage ~/fm/fm-skills                    stage the Anvil's description bundle here
 #
 # This file is the noun; the first argument is the verb, exactly as fm-tools
 # forwards it. The work lives in fm_robot_agent.client, so the CLI and the
 # desktop drive the same key space with the same rules.
 #
 # Exit codes: 0 success, 1 the robot refused, 2 usage, 3 precondition
-# (no router endpoint, or the robot did not answer).
+# (no router endpoint, the robot did not answer, or `stage` found no
+# description package in the checkout or refused the bundle path).
 
 set -euo pipefail
 
@@ -32,5 +34,11 @@ FM_ROOT="$(cd "$_here/../.." && pwd)"
 if [ "${1:-}" = host ]; then
   shift
   exec uv run --project "$FM_ROOT" fm-robot-agent --host "$@"
+fi
+# `stage` also acts on this machine: it copies the Anvil's description from an
+# fm-skills checkout into the bundle the agent here serves.
+if [ "${1:-}" = stage ]; then
+  shift
+  exec uv run --project "$FM_ROOT" fm-robot-stage "$@"
 fi
 exec uv run --project "$FM_ROOT" fm-robot "$@"
