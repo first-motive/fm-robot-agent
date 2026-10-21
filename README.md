@@ -207,18 +207,29 @@ anything but a mesh, or exceeds 32 MB. Neither verb answers a wildcard query.
 Without a bundle both refuse, and the desktop falls back to its own workspace
 copy and says so.
 
-Stage the bundle from the same files the fm visualiser
+On the Anvil, stage the bundle from an fm-skills checkout on its host:
+
+```bash
+fm robot stage ~/fm/fm-skills
+```
+
+It copies the private `openarm_v2_anvil_description` package: its
+`urdf/robot.urdf` becomes `<bundle>/robot.urdf`, and its `urdf/` and `cad/`
+land under `<bundle>/packages/openarm_v2_anvil_description/`, where the URDF's
+`package://` mesh URIs resolve. The URDF uses the loader's joint and link names
+and draws the Anvil gripper the workcell carries, not the stock OpenArm hand.
+Staging replaces only `robot.urdf`, `packages/`, and the `arms/` and
+`grippers/` an earlier hand copy left; `calibration/` and anything else stay.
+It refuses a package that holds a symlink, and a bundle path that is the home
+directory, a filesystem root, or the checkout or a directory above it. It reads
+the checkout as given: it never clones, so it needs no credentials.
+
+Stage the other robots by hand from the same files the fm visualiser
 (`fm_description/view_robot.launch.py`) reads:
 
 ```bash
 B=~/.local/share/fm-robot-agent/description
 mkdir -p "$B/packages"
-
-# Anvil, from Anvil's CAD package (openarm_v2_bimanual, received 2026-10-13).
-# The loader's /robot_description draws the stock OpenArm hand; this package
-# draws the Anvil gripper the workcell carries. Its mesh paths are relative.
-cp openarm_v2_bimanual/openarm_v2_bimanual.urdf "$B/robot.urdf"
-cp -r openarm_v2_bimanual/arms openarm_v2_bimanual/grippers "$B/"
 
 # Axol, from the axol checkout's almond_axol/kinematics/urdf.
 cp axol.urdf "$B/robot.urdf"
