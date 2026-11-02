@@ -271,3 +271,7 @@ def test_the_stack_command_is_an_argv_not_a_shell_line(tmp_path):
     argv = profile(tmp_path).stack_command(8790)
     assert argv[:5] == ["uv", "run", "--project", "unused", "fm-teleop-so101"]
     assert argv[argv.index("--owner") + 1] == "fm-rob-03"
+
+
+def test_there_is_no_perception_node(adapter):
+    assert not adapter.perception_debug(True).ok

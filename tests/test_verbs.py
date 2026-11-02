@@ -424,3 +424,35 @@ def test_pose_refuses_a_malformed_request(robot, payload):
 def test_pose_go_names_a_pose_and_nothing_more(robot):
     assert body(ask(robot, "pose", payload={"action": "go", "name": "board-1"}))["ok"] is True
     assert robot.posed == ("go", "board-1")
+
+
+# --- perception debug -----------------------------------------------------------
+
+
+def test_perception_debug_on_then_off_reaches_the_adapter(robot):
+    on = body(ask(robot, "perception_debug", payload={"enabled": True}))
+    assert on["ok"] is True and on["enabled"] is True and on["lease_s"] == 60
+    assert robot.perception_debug_enabled is True
+    assert body(ask(robot, "perception_debug", payload={"enabled": False}))["enabled"] is False
+    assert robot.perception_debug_enabled is False
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        None,
+        {},
+        {"enabled": "true"},                    # text, not a boolean
+        {"enabled": 1},
+        {"enabled": None},
+        {"enabled": True, "rate_hz": 30},       # nothing else rides along
+    ],
+)
+def test_perception_debug_refuses_anything_but_one_boolean(robot, payload):
+    reply = ask(robot, "perception_debug", payload=payload)
+    assert reply.ok is False
+    assert robot.perception_debug_enabled is False
+
+
+def test_perception_debug_is_not_answered_for_a_wildcard():
+    assert verb_of(key("perception_debug", "*"), NS) is None

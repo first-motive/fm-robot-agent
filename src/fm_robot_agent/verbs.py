@@ -24,6 +24,10 @@ episode queryable uses, for the same reason: the suite runs with no router.
     fm/robot/<ns>/asset       read    ?uri=<package://...>, one mesh, as bytes
     fm/robot/<ns>/calibration write   {"action": "get"|"set", "camera": ..., "lens": ..., "mount": ...}
                                       every camera's lens and mount (see calibration.py)
+    fm/robot/<ns>/perception_debug
+                              write   {"enabled": true|false}
+                                      perception's debug frames: true turns them on and
+                                      renews their lease, false turns them off
 
 Read and write verbs are both queries. Zenoh's put/subscribe pair delivers no
 reply, and every verb here has an answer the caller must see — a refused mode, a
@@ -52,7 +56,8 @@ READ_VERBS = ("status", "episodes")
 #: Reads a caller must name a robot for. A wildcard over these would pull every
 #: robot's URDF or meshes in one query, which no discovery needs.
 NAMED_READS = ("description", "asset")
-WRITE_VERBS = ("up", "down", "config", "mode", "record", "stop", "session", "collect", "calibration", "pose")
+WRITE_VERBS = ("up", "down", "config", "mode", "record", "stop", "session", "collect", "calibration", "pose",
+               "perception_debug")
 
 #: What `calibration` can be asked to do. `get` sits with the writes for the
 #: reason config's does: a discovery wildcard has no business reading it.
@@ -340,6 +345,19 @@ def _calibration(key: str, bundle: DescriptionBundle, body: dict) -> Reply:
     return _envelope(key, {"ok": True, "camera": camera, **entry})
 
 
+def _perception_debug(key: str, adapter: RobotAdapter, body: dict) -> Reply:
+    """Turn perception's debug frames on, renewing their lease, or off.
+
+    The body is one boolean and nothing else. It is the only value that reaches
+    the robot, so a missing, mistyped or extra field is refused rather than read
+    as a default.
+    """
+    enabled = body.get("enabled")
+    if set(body) != {"enabled"} or not isinstance(enabled, bool):
+        return _refuse(key, 'perception_debug takes {"enabled": true|false} and nothing else')
+    return _outcome(key, adapter.perception_debug(enabled))
+
+
 def verb_of(key: str, namespace: str) -> str | None:
     """The verb a key names, or ``None`` when the key is not ours.
 
@@ -427,6 +445,9 @@ def answer(
             return _collect(key, adapter, body)
         if verb == "pose":
             return _pose(key, adapter, body)
+
+        if verb == "perception_debug":
+            return _perception_debug(key, adapter, body)
 
         if verb == "session":
             action = body.get("action") or "get"

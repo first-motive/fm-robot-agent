@@ -28,6 +28,11 @@ from fm_robot_agent.config import Setting
 #: a field that has moved underneath it.
 SCHEMA_VERSION = 1
 
+#: How long one ``perception_debug`` true keeps the debug frames on. The
+#: perception node's own ``debug_lease_s`` default, reported so a caller knows
+#: how often to renew; the node, not the agent, enforces it.
+PERCEPTION_DEBUG_LEASE_S = 60
+
 
 class AdapterError(Exception):
     """The robot refused, or could not be reached. Surfaced to the caller verbatim."""
@@ -179,6 +184,16 @@ class RobotAdapter(Protocol):
         the robot reports about its loop, ``detail["warnings"]`` the conditions
         a start went ahead through, and ``detail["code"]`` the reason a refusal
         carries. A robot with no collection loop refuses every action.
+        """
+
+    def perception_debug(self, enabled: bool) -> Outcome:
+        """Turn the perception node's debug frames on, renewing their lease, or off.
+
+        Calls ``/perception/set_debug`` (``std_srvs/srv/SetBool``) on the robot's
+        own graph. Debug frames move nothing; they cost bandwidth, which is why
+        the node turns them off :data:`PERCEPTION_DEBUG_LEASE_S` after the last
+        true. ``detail`` carries ``enabled`` and ``lease_s``. Refused when the
+        stack is down, and by a robot with no perception node.
         """
 
     def stop(self) -> Outcome:

@@ -219,6 +219,9 @@ class So101Adapter:
     def collect(self, action: str, options: dict[str, str] | None = None) -> Outcome:
         return Outcome(ok=False, message="the SO-101 has no collection loop")
 
+    def perception_debug(self, enabled: bool) -> Outcome:
+        return Outcome(ok=False, message="the SO-101 runs no perception node")
+
     def record(self, dataset: str, action: str, task: str = "", note: str = "", episode: str = "") -> Outcome:
         if note or episode:
             return Outcome(ok=False, message="the SO-101 stack takes no stop note or episode check")

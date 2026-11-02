@@ -15,6 +15,10 @@ the webapp's tRPC API
     ``stop`` and the two state getters. ``anvil_msgs`` lives only inside that
     container, so a service call has to be made from within it.
 
+``/perception/set_debug`` inside the ros2 container
+    ``perception_debug``. The perception node's SetBool switch for its debug
+    frames, called the same way as the services above.
+
 ``scripts/run/tactile-collect.sh`` in the anvil-embodied-ai checkout
     ``collect``. The unattended collection loop belongs to that repo, and so do
     its preflight and its stop, which drives the arm home. The agent adds one
@@ -65,7 +69,12 @@ from fm_robot_agent.config import (
     restore,
 )
 from fm_robot_agent.description import DescriptionBundle
-from fm_robot_agent.protocol import AdapterError, Outcome, task_not_recorded
+from fm_robot_agent.protocol import (
+    PERCEPTION_DEBUG_LEASE_S,
+    AdapterError,
+    Outcome,
+    task_not_recorded,
+)
 from fm_robot_agent.trpc import TrpcClient
 
 KIND = "anvil-openarm-v2"
@@ -212,6 +221,24 @@ SERVICE_TIMEOUT_S = 15
 POSE_TIMEOUT_S = 90
 COMPOSE_TIMEOUT_S = 30
 
+#: The perception node's debug switch, and the two requests it is ever sent.
+#: The request is picked from this table, never formatted from the caller's
+#: value, so nothing off the fabric reaches the container's shell.
+PERCEPTION_DEBUG_SERVICE = "/perception/set_debug"
+PERCEPTION_DEBUG_TYPE = "std_srvs/srv/SetBool"
+PERCEPTION_DEBUG_REQUESTS = {True: "{data: true}", False: "{data: false}"}
+#: `ros2 service call` waits forever for a service that is not there, so the
+#: call is stopped inside the container first and the local exec after it.
+#: The stack check before it is bounded by COMPOSE_TIMEOUT_S.
+PERCEPTION_DEBUG_DEADLINE_S = 8
+PERCEPTION_DEBUG_TIMEOUT_S = 10
+#: The SetBool reply as `ros2 service call` prints it, the same repr parse
+#: IS_RECORDING_PATTERN makes.
+SET_BOOL_SUCCESS = re.compile(r"success=(True|False)")
+
+#: What coreutils `timeout` exits with when it stopped the command.
+TIMEOUT_EXIT = 124
+
 #: The host's own memory accounting. The agent runs outside the containers, so
 #: this is the whole devbox — the number the kernel's OOM killer acts on.
 MEMINFO = Path("/proc/meminfo")
@@ -251,6 +278,10 @@ COLLECT_FLAGS = {"object": "--object", "hours": "--hours", "cycles": "--cycles",
 KEEP_REPLAY_BUFFER = "FM_ANVIL_KEEP_REPLAY_BUFFER"
 
 
+class NoAnswer(AdapterError):
+    """A command inside the ros2 container ran out of time, as opposed to failing."""
+
+
 class AnvilAdapter:
     """One Anvil workcell, reached through the loader directory on this host."""
 
@@ -275,6 +306,7 @@ class AnvilAdapter:
         self.collect_arm = collect_arm or COLLECT_ARM_FILE
         self._collect_lock = threading.Lock()
         self._pose_lock = threading.Lock()
+        self._perception_lock = threading.Lock()
         self.config_dir = self.loader_dir / "config"
         self.env_config = self.loader_dir / ".env.config"
         self.recordings_dir = self.loader_dir / "data" / "recordings"
@@ -539,6 +571,43 @@ class AnvilAdapter:
                 self._collect_lock.release()
         finally:
             self._pose_lock.release()
+
+    def perception_debug(self, enabled: bool) -> Outcome:
+        """Switch perception's debug frames through its SetBool service.
+
+        Refused while the stack is down, where no perception node runs to ask,
+        and while another switch is in flight: a renewal queued behind a call
+        that is waiting out its deadline would answer after its caller gave up.
+        The reason a call did not land stays in this host's journal; the reply
+        says only whether the node was silent or the call failed.
+        """
+        if not self._perception_lock.acquire(blocking=False):
+            return Outcome(ok=False, message="busy: another perception debug call is still running",
+                           detail={"code": "busy"})
+        try:
+            return self._perception_debug(enabled)
+        finally:
+            self._perception_lock.release()
+
+    def _perception_debug(self, enabled: bool) -> Outcome:
+        if not self._stack_running():
+            return Outcome(ok=False, message="the stack is down; bring it up before asking for perception debug",
+                           detail={"code": "stack_down"})
+        try:
+            output = self._service_call(PERCEPTION_DEBUG_SERVICE, PERCEPTION_DEBUG_TYPE,
+                                        PERCEPTION_DEBUG_REQUESTS[enabled],
+                                        timeout_s=PERCEPTION_DEBUG_TIMEOUT_S, deadline_s=PERCEPTION_DEBUG_DEADLINE_S)
+        except NoAnswer as exc:
+            print(f"fm-robot-agent: perception debug: {exc}", file=sys.stderr, flush=True)
+            raise AdapterError(f"{PERCEPTION_DEBUG_SERVICE} did not answer; is perception running?") from exc
+        except AdapterError as exc:
+            print(f"fm-robot-agent: perception debug: {exc}", file=sys.stderr, flush=True)
+            raise AdapterError(f"the {PERCEPTION_DEBUG_SERVICE} call failed") from exc
+        success = SET_BOOL_SUCCESS.search(output)
+        if success is None or success.group(1) != "True":
+            return Outcome(ok=False, message=f"{PERCEPTION_DEBUG_SERVICE} refused the request")
+        return Outcome(ok=True, message=f"perception debug {'on' if enabled else 'off'}",
+                       detail={"enabled": enabled, "lease_s": PERCEPTION_DEBUG_LEASE_S})
 
     def _collect_running(self) -> bool | None:
         """Whether the collection loop is running: False with no checkout to run
@@ -1197,8 +1266,12 @@ class AnvilAdapter:
                 timeout=timeout_s,
                 check=False,
             )
-        except (OSError, subprocess.TimeoutExpired) as exc:
+        except subprocess.TimeoutExpired as exc:
+            raise NoAnswer(f"{what} did not answer: {exc}") from exc
+        except OSError as exc:
             raise AdapterError(f"{what} did not answer: {exc}") from exc
+        if result.returncode == TIMEOUT_EXIT:
+            raise NoAnswer(f"{what} did not answer before its deadline")
         if result.returncode != 0:
             raise AdapterError(f"{what} failed: {result.stderr.strip() or 'no output'}")
         return result.stdout
@@ -1228,12 +1301,24 @@ class AnvilAdapter:
             raise AdapterError(f"{what} failed (exit {result.returncode})")
         return result.stdout
 
-    def _service_call(self, service: str, service_type: str, request: str) -> str:
-        """Call a ROS service from inside the ros2 container, and return its output."""
-        return self._ros_command(
-            f"ros2 service call {shlex.quote(service)} {shlex.quote(service_type)} {shlex.quote(request)}",
-            service,
-        )
+    def _service_call(
+        self,
+        service: str,
+        service_type: str,
+        request: str,
+        timeout_s: float = SERVICE_TIMEOUT_S,
+        deadline_s: int | None = None,
+    ) -> str:
+        """Call a ROS service from inside the ros2 container, and return its output.
+
+        ``deadline_s`` stops the call inside the container, under ``timeout_s``,
+        for a service that may not exist: `ros2 service call` would wait for it
+        forever, and the local timeout kills only the exec, not the call.
+        """
+        command = f"ros2 service call {shlex.quote(service)} {shlex.quote(service_type)} {shlex.quote(request)}"
+        if deadline_s is not None:
+            command = f"timeout {int(deadline_s)} {command}"
+        return self._ros_command(command, service, timeout_s)
 
     def _is_recording(self) -> bool | None:
         """Whether the workcell is recording, or ``None`` when the stack is down."""

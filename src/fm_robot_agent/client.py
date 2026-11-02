@@ -21,6 +21,7 @@ and the reply into either a line a person reads or the JSON a script does.
     fm robot fm-rob-01 pose plan board-1                     how far and how long; nothing moves
     fm robot fm-rob-01 pose go board-1                       move both arms there (armed on the robot first)
     fm robot fm-rob-01 pose home                             back home, arms handed back
+    fm robot fm-rob-01 perception_debug on                   debug frames for 60 s; off ends them
     fm robot list
 
 ``list`` is a wildcard query over ``fm/robot/*/status``: the fabric is the
@@ -70,6 +71,9 @@ POSE_TIMEOUT_S = 100.0
 #: naming that key and predates the config verb.
 MODE_SUGAR = "mode"
 TYPED_VERBS = (*VERBS, MODE_SUGAR)
+
+#: What a typed `perception_debug` takes, and the boolean each sends.
+PERCEPTION_DEBUG_VALUES = {"on": True, "off": False}
 
 EX_USAGE = 2
 EX_PRECONDITION = 3
@@ -141,6 +145,8 @@ def build_payload(verb: str, args: argparse.Namespace) -> dict | None:
         if args.assignment:
             body["name"] = args.assignment
         return body
+    if verb == "perception_debug":
+        return {"enabled": PERCEPTION_DEBUG_VALUES[args.value]}
     if verb == "collect":
         body = {"action": args.value or "status"}
         for name in ("object", "hours", "cycles", "speed"):
@@ -248,7 +254,7 @@ def main(argv: list[str] | None = None) -> int:
         nargs="?",
         help=f"mode: the config; record: start | stop; config: {' | '.join(CONFIG_ACTIONS)}; "
         f"session: {' | '.join(SESSION_ACTIONS)}; collect: {' | '.join(COLLECT_ACTIONS)}; "
-        "pose: list | plan NAME | go NAME | home",
+        "pose: list | plan NAME | go NAME | home; perception_debug: on | off",
     )
     parser.add_argument("assignment", nargs="?", help="config set: KEY=VALUE; pose plan or go: the pose name")
     parser.add_argument(
@@ -297,6 +303,8 @@ def main(argv: list[str] | None = None) -> int:
             parser.error(f"session takes one of: {', '.join(SESSION_ACTIONS)}")
         if args.value == "set" and not args.dataset:
             parser.error("session set needs --dataset")
+    if not listing and args.verb == "perception_debug" and args.value not in PERCEPTION_DEBUG_VALUES:
+        parser.error("perception_debug takes on or off")
     if not listing and args.verb == "collect":
         action = args.value or "status"
         if action not in COLLECT_ACTIONS:
