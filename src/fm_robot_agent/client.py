@@ -176,8 +176,13 @@ def query(
     payload: dict | None = None,
     parameters: str = "",
     timeout_s: float = QUERY_TIMEOUT_S,
+    text_reply: bool = False,
 ) -> list[dict]:
-    """Send one query and collect every reply, decoded."""
+    """Send one query and collect every reply, decoded.
+
+    ``text_reply`` accepts a successful reply that is UTF-8 text rather than
+    JSON, which is how ``description`` answers with its URDF.
+    """
     import zenoh
 
     selector = f"{key}?{parameters}" if parameters else key
@@ -193,10 +198,16 @@ def query(
             continue
         # A ReplyError carries no key expression, only the payload.
         key_expr = getattr(sample, "key_expr", None)
+        raw = bytes(sample.payload)
         try:
-            reply_body = json.loads(bytes(sample.payload))
+            reply_body = json.loads(raw)
         except (json.JSONDecodeError, UnicodeDecodeError):
             reply_body = {"ok": False, "error": "reply was not JSON", "key": str(key_expr or key)}
+            if text_reply and reply.ok is not None:
+                try:
+                    reply_body = {"ok": True, "text": raw.decode("utf-8")}
+                except UnicodeDecodeError:
+                    pass
         # A `list` reply is otherwise anonymous: the payload names no robot, so
         # the caller sees how many answered and never which ones.
         device = device_of(key_expr)
@@ -237,6 +248,9 @@ def render(replies: list[dict], as_json: bool) -> None:
             continue
         if "config" in reply:
             render_config(reply)
+            continue
+        if "text" in reply:
+            print(safe(reply["text"]))
             continue
         shown = {k: v for k, v in reply.items() if k not in ("schema_version", "warnings")}
         print(safe(json.dumps(shown, sort_keys=True)))
@@ -341,6 +355,7 @@ def main(argv: list[str] | None = None) -> int:
             parameters,
             timeout_s={"config": CONFIG_TIMEOUT_S, "collect": COLLECT_TIMEOUT_S, "pose": POSE_TIMEOUT_S}.get(
                 verb, QUERY_TIMEOUT_S),
+            text_reply=verb == "description",
         )
 
     if not replies:
