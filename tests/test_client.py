@@ -257,6 +257,39 @@ def test_a_keyless_reply_that_is_not_json_names_the_selector():
     assert reply["key"] == "fm/robot/fm_rob_01/status"
 
 
+def test_a_text_reply_is_kept_as_text(capsys):
+    """`description` answers with the URDF itself, which the CLI prints as it is."""
+    sample = FakeSample({}, "fm/robot/fm_rob_01/description")
+    sample.payload = b'<robot name="anvil">\n  <link name="follower_body_link0"/>\n</robot>\x1b[2J'
+    [reply] = client.query(FakeSession([FakeReply(ok=sample)]), "fm/robot/fm_rob_01/description", text_reply=True)
+    assert reply["ok"] is True
+    client.render([reply], as_json=False)
+    out = capsys.readouterr().out
+    assert '<link name="follower_body_link0"/>' in out
+    assert "\x1b" not in out
+
+
+def test_a_text_reply_from_a_json_verb_stays_a_refusal():
+    sample = FakeSample({}, "fm/robot/fm_rob_01/status")
+    sample.payload = b"plain text"
+    [reply] = client.query(FakeSession([FakeReply(ok=sample)]), "fm/robot/fm_rob_01/status")
+    assert reply["error"] == "reply was not JSON"
+
+
+def test_an_undecodable_text_reply_stays_a_refusal():
+    sample = FakeSample({}, "fm/robot/fm_rob_01/description")
+    sample.payload = b"\xff\xfe"
+    [reply] = client.query(FakeSession([FakeReply(ok=sample)]), "fm/robot/fm_rob_01/description", text_reply=True)
+    assert reply["error"] == "reply was not JSON"
+
+
+def test_an_error_reply_that_is_not_json_stays_a_refusal():
+    sample = FakeSample({})
+    sample.payload = b"plain refusal"
+    [reply] = client.query(FakeSession([FakeReply(err=sample)]), "fm/robot/fm_rob_01/description", text_reply=True)
+    assert reply["ok"] is False
+
+
 def test_an_ok_reply_still_names_its_robot():
     session = FakeSession([FakeReply(ok=FakeSample({"ok": True}, "fm/robot/fm_rob_01/status"))])
     assert client.query(session, "fm/robot/*/status") == [{"ok": True, "device": "fm-rob-01"}]
