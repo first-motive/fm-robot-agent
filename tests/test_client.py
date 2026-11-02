@@ -222,6 +222,46 @@ def test_a_key_that_is_not_ours_names_no_robot():
     assert client.device_of("other/ns/fm_rob_01/status") == ""
 
 
+class FakeSample:
+    def __init__(self, body: dict, key_expr: str | None = None):
+        self.payload = json.dumps(body).encode()
+        if key_expr is not None:
+            self.key_expr = key_expr
+
+
+class FakeReply:
+    def __init__(self, ok=None, err=None):
+        self.ok, self.err = ok, err
+
+
+class FakeSession:
+    def __init__(self, replies):
+        self.replies = replies
+
+    def get(self, selector, **kwargs):
+        return iter(self.replies)
+
+
+def test_an_error_reply_without_a_key_is_returned_as_the_refusal():
+    """zenoh's ReplyError has no key_expr; the refusal must still reach the caller."""
+    refusal = {"ok": False, "error": "perception node did not answer"}
+    session = FakeSession([FakeReply(err=FakeSample(refusal))])
+    assert client.query(session, "fm/robot/fm_rob_01/perception_debug") == [refusal]
+
+
+def test_a_keyless_reply_that_is_not_json_names_the_selector():
+    sample = FakeSample({})
+    sample.payload = b"not json"
+    session = FakeSession([FakeReply(err=sample)])
+    [reply] = client.query(session, "fm/robot/fm_rob_01/status")
+    assert reply["key"] == "fm/robot/fm_rob_01/status"
+
+
+def test_an_ok_reply_still_names_its_robot():
+    session = FakeSession([FakeReply(ok=FakeSample({"ok": True}, "fm/robot/fm_rob_01/status"))])
+    assert client.query(session, "fm/robot/*/status") == [{"ok": True, "device": "fm-rob-01"}]
+
+
 # --- collect -----------------------------------------------------------------
 
 

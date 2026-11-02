@@ -191,13 +191,15 @@ def query(
         sample = reply.ok if reply.ok is not None else reply.err
         if sample is None:
             continue
+        # A ReplyError carries no key expression, only the payload.
+        key_expr = getattr(sample, "key_expr", None)
         try:
             reply_body = json.loads(bytes(sample.payload))
         except (json.JSONDecodeError, UnicodeDecodeError):
-            reply_body = {"ok": False, "error": "reply was not JSON", "key": str(sample.key_expr)}
+            reply_body = {"ok": False, "error": "reply was not JSON", "key": str(key_expr or key)}
         # A `list` reply is otherwise anonymous: the payload names no robot, so
         # the caller sees how many answered and never which ones.
-        device = device_of(sample.key_expr)
+        device = device_of(key_expr)
         replies.append({**reply_body, "device": device} if device else reply_body)
     del zenoh
     return replies
