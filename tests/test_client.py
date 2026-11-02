@@ -269,3 +269,16 @@ def test_a_warning_that_is_plain_text_still_gets_its_line(capsys):
 def test_a_collect_refusal_names_the_robots_code(capsys):
     client.render([{"ok": False, "message": "classical nodes are not up", "code": "nodes_down"}], as_json=False)
     assert capsys.readouterr().out.strip() == "refused (nodes_down): classical nodes are not up"
+
+
+# --- perception debug --------------------------------------------------------
+
+
+@pytest.mark.parametrize(("value", "enabled"), [("on", True), ("off", False)])
+def test_perception_debug_sends_one_boolean(value, enabled):
+    assert client.build_payload("perception_debug", args(value=value)) == {"enabled": enabled}
+
+
+def test_perception_debug_needs_on_or_off():
+    with pytest.raises(SystemExit):
+        client.main(["fm-rob-01", "perception_debug", "maybe"])

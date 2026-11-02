@@ -9,7 +9,7 @@ verb set over Zenoh:
 
 ```
 status · up · down · config · record · stop · episodes · session · collect
-description · asset · calibration
+description · asset · calibration · perception_debug
 ```
 
 Every byte reaches the fleet through the Zenoh router on 7447, so a robot is
@@ -307,6 +307,31 @@ home: switches back to the forward controllers, seeded with the measured joints
 rclpy is. Between `go` and `home` the arms hold on their trajectory controllers,
 so teleop and the policy do not drive them; `home` gives them back. `stop`
 pauses the hardware as always.
+
+## Perception Debug
+
+The perception node publishes its debug frames (every candidate, mask and gate
+reason) only while a caller asks for them, because they cost bandwidth the
+detections alone do not:
+
+```
+fm/robot/<ns>/perception_debug   {"enabled": true}    on, and renew the 60 s lease
+                                 {"enabled": false}   off now
+reply                            {"ok": true, "enabled": <bool>, "lease_s": 60}
+```
+
+On the Anvil the agent calls `/perception/set_debug` (`std_srvs/srv/SetBool`)
+from inside the loader's ros2 container. It refuses while the stack is down,
+and while another such call is in flight. The service call is bounded at 10 s;
+with the stack check before it, the worst case is 40 s. The node turns debug
+off itself 60 s after the last true, so a caller that goes away leaves nothing
+on. The body is the one boolean and nothing else; the Axol and the SO-101
+refuse the verb.
+
+```bash
+fm robot fm-rob-01 perception_debug on
+fm robot fm-rob-01 perception_debug off
+```
 
 ## Status
 

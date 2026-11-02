@@ -375,6 +375,9 @@ class AxolAdapter:
         """The Axol records by operation; the unattended loop exists only on the Anvil."""
         return Outcome(ok=False, message="the Axol has no collection loop")
 
+    def perception_debug(self, enabled: bool) -> Outcome:
+        return Outcome(ok=False, message="the Axol runs no perception node")
+
     def record(self, dataset: str, action: str, task: str = "", note: str = "", episode: str = "") -> Outcome:
         """Start or stop `collect-data`, which takes a dataset and nothing else.
 

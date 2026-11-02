@@ -680,3 +680,8 @@ def test_there_is_no_collection_loop(adapter, server):
     outcome = adapter.collect("start", {"object": "can"})
     assert not outcome.ok and "no collection loop" in outcome.message
     assert server.running_op is None
+
+
+def test_there_is_no_perception_node(adapter, server):
+    outcome = adapter.perception_debug(True)
+    assert not outcome.ok and "no perception node" in outcome.message

@@ -307,6 +307,86 @@ def test_a_failed_service_call_surfaces_the_reason(adapter, monkeypatch):
         adapter.stop()
 
 
+# --- perception debug ---------------------------------------------------------
+
+
+SET_BOOL_OK = "response:\nstd_srvs.srv.SetBool_Response(success=True, message='debug on')\n"
+
+
+def serve_set_bool(monkeypatch, reply=SET_BOOL_OK, returncode=0):
+    """The stack up, and /perception/set_debug answering ``reply``; returns the argv seen."""
+    seen = []
+
+    def run(argv, **kw):
+        seen.append((argv, kw))
+        if "ps" in argv:
+            return subprocess.CompletedProcess(argv, 0, COMPOSE_PS, "")
+        return subprocess.CompletedProcess(argv, returncode, reply, "")
+
+    monkeypatch.setattr(subprocess, "run", run)
+    return seen
+
+
+@pytest.mark.parametrize(("enabled", "request_text"), [(True, "{data: true}"), (False, "{data: false}")])
+def test_perception_debug_calls_set_bool_in_the_ros2_container(adapter, monkeypatch, enabled, request_text):
+    seen = serve_set_bool(monkeypatch)
+    outcome = adapter.perception_debug(enabled)
+    assert outcome.ok and outcome.detail == {"enabled": enabled, "lease_s": 60}
+    argv, kw = seen[-1]
+    assert argv[:7] == ["docker", "compose", "exec", "-T", "ros2", "bash", "-c"]
+    assert "timeout 8 ros2 service call /perception/set_debug std_srvs/srv/SetBool" in argv[-1]
+    assert f"'{request_text}'" in argv[-1]
+    assert kw["timeout"] == 10
+
+
+def test_perception_debug_is_refused_while_the_stack_is_down(adapter, monkeypatch):
+    seen = []
+    monkeypatch.setattr(subprocess, "run",
+                        lambda argv, **kw: seen.append(argv) or subprocess.CompletedProcess(argv, 0, "", ""))
+    outcome = adapter.perception_debug(True)
+    assert not outcome.ok and outcome.detail["code"] == "stack_down"
+    assert all("ps" in argv for argv in seen), "a down stack must not be asked a service call"
+
+
+def test_perception_debug_relays_a_refusal_from_the_node(adapter, monkeypatch):
+    serve_set_bool(monkeypatch, reply="std_srvs.srv.SetBool_Response(success=False, message='')\n")
+    assert not adapter.perception_debug(True).ok
+
+
+def test_perception_debug_names_the_service_when_it_does_not_answer(adapter, monkeypatch):
+    serve_set_bool(monkeypatch, reply="waiting for service to become available...\n", returncode=124)
+    with pytest.raises(AdapterError, match="/perception/set_debug did not answer"):
+        adapter.perception_debug(False)
+
+
+def test_perception_debug_says_a_failed_call_failed(adapter, monkeypatch):
+    serve_set_bool(monkeypatch, reply="", returncode=1)
+    with pytest.raises(AdapterError, match="the /perception/set_debug call failed"):
+        adapter.perception_debug(True)
+
+
+def test_a_local_exec_timeout_is_also_no_answer(adapter, monkeypatch):
+    def hang(argv, **kw):
+        if "ps" in argv:
+            return subprocess.CompletedProcess(argv, 0, COMPOSE_PS, "")
+        raise subprocess.TimeoutExpired(argv, kw["timeout"])
+
+    monkeypatch.setattr(subprocess, "run", hang)
+    with pytest.raises(AdapterError, match="did not answer; is perception running"):
+        adapter.perception_debug(True)
+
+
+def test_a_second_perception_debug_call_in_flight_is_refused_at_once(adapter, monkeypatch):
+    serve_set_bool(monkeypatch)
+    adapter._perception_lock.acquire()
+    try:
+        outcome = adapter.perception_debug(True)
+    finally:
+        adapter._perception_lock.release()
+    assert not outcome.ok and outcome.detail["code"] == "busy"
+    assert adapter.perception_debug(True).ok
+
+
 # --- recording ---------------------------------------------------------------
 
 

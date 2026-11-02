@@ -20,7 +20,7 @@ from fm_robot_agent.config import (
     UNKNOWN,
     Setting,
 )
-from fm_robot_agent.protocol import Outcome, task_not_recorded
+from fm_robot_agent.protocol import PERCEPTION_DEBUG_LEASE_S, Outcome, task_not_recorded
 
 MODES = ("idle", "teleop")
 
@@ -50,6 +50,8 @@ class FakeAdapter:
         #: The collection loop's run, while one is going, and how many have run.
         self.collecting: str | None = None
         self.collect_runs = 0
+        #: What the last perception_debug asked for. The fake publishes no frames.
+        self.perception_debug_enabled = False
         self._episodes: dict[str, list[dict]] = {}
         self.config = {
             "ARMS_CONTROL_CONFIG_FILE": MODES[0],
@@ -186,6 +188,11 @@ class FakeAdapter:
                      "stop_reason": None, "free_gb": 0},
             "warnings": [],
         }
+
+    def perception_debug(self, enabled: bool) -> Outcome:
+        self.perception_debug_enabled = enabled
+        return Outcome(ok=True, message=f"perception debug {'on' if enabled else 'off'}",
+                       detail={"enabled": enabled, "lease_s": PERCEPTION_DEBUG_LEASE_S})
 
     def stop(self) -> Outcome:
         self.recording = None
