@@ -17,6 +17,12 @@ gravity compensation, a trained policy — so switching mode is stopping whateve
 runs and starting the next. The names the fleet uses (``teleop``,
 ``gravity-comp``, ``policy``) map onto the server's operation ids.
 
+*``ros`` is the one mode that is not an operation.* It hands the CAN buses to
+fm-axol's core and its ROS container (see :mod:`fm_robot_agent.axol_ros`), and
+only one process may command those buses. So ``ros`` refuses while an operation
+runs, disconnects Almond's link before the core starts, and while it is on every
+operation the agent is asked for is refused until ``stop`` or ``down`` ends it.
+
 *Datasets are LeRobot repo ids.* A repo id carries a ``/``, which is exactly the
 character a dataset name may not contain. The owner half is configuration, the
 caller supplies only the name half, and the two are joined here.
@@ -24,17 +30,20 @@ caller supplies only the name half, and the two are joined here.
 
 from __future__ import annotations
 
+import functools
 import ipaddress
 import json
 import os
 import re
 import ssl
+import threading
 import time
 import urllib.error
 import urllib.request
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from fm_robot_agent.axol_ros import RosStack, holds_buses
 from fm_robot_agent.cdr import joint_state
 from fm_robot_agent.config import (
     MODE,
@@ -61,6 +70,12 @@ MODES = {
     "gravity-comp": "gravity-comp",
     "policy": "run-policy",
 }
+
+#: The mode that runs fm-axol's ROS stack instead of an Almond operation.
+ROS_MODE = "ros"
+
+#: Every mode `status` reports, Almond's operations and `ros` together.
+ALL_MODES = tuple(sorted((*MODES, ROS_MODE)))
 
 RECORD_OPERATION = "collect-data"
 
@@ -159,17 +174,36 @@ def _ssl_context(url: str) -> ssl.SSLContext | None:
     return context
 
 
+def _holding_bus_lock(method):
+    """Run a verb that checks or changes who holds the CAN buses under the adapter's lock."""
+
+    @functools.wraps(method)
+    def locked(self, *args, **kwargs):
+        with self._bus_lock:
+            return method(self, *args, **kwargs)
+
+    return locked
+
+
 class AxolAdapter:
     """One Axol, reached through the Almond server on this host."""
 
     kind = KIND
 
-    def __init__(self, base_url: str | None = None, dataset_owner: str | None = None) -> None:
+    def __init__(
+        self, base_url: str | None = None, dataset_owner: str | None = None, ros: RosStack | None = None
+    ) -> None:
         self.base_url = (base_url or os.environ.get("FM_AXOL_URL", DEFAULT_BASE_URL)).rstrip("/")
         owner = dataset_owner or os.environ.get("FM_AXOL_DATASET_OWNER", DEFAULT_DATASET_OWNER)
         if not OWNER_PATTERN.match(owner):
             raise AdapterError(f"dataset owner {owner!r} is not a plain name")
         self.dataset_owner = owner
+        self.ros = ros or RosStack()
+        # Each fabric query runs on its own thread, so every check that the buses
+        # are free is held together with the action it guards. Reentrant because
+        # `config_write` of the mode reaches `set_mode`. A stop waits out a start
+        # in flight rather than racing it.
+        self._bus_lock = threading.RLock()
 
     # --- the verb set --------------------------------------------------------
 
@@ -178,6 +212,8 @@ class AxolAdapter:
         operation = self._get("/api/op/status")
         session = operation.get("session") or {}
         running = bool(operation.get("running"))
+        units = self.ros.states()
+        ros_on = holds_buses(units)
         return {
             # `command` holds the operation id — Session.to_dict() in the Axol's
             # own manager spells it that way, and nothing spells it `op`.
@@ -185,11 +221,14 @@ class AxolAdapter:
             # Only a RUNNING operation is a mode. The Axol keeps the last session
             # in its status long after it exits, so reading the name alone
             # reports a robot as teleoperating while its motors sit disconnected.
-            "mode": self._fleet_mode(session.get("command")) if running else None,
-            "modes": sorted(MODES),
+            "mode": ROS_MODE if ros_on else (self._fleet_mode(session.get("command")) if running else None),
+            "modes": list(ALL_MODES),
             "hardware": robot.get("state", "unknown"),
             "recording": running and session.get("command") == RECORD_OPERATION,
-            "services": [{"name": "almond-axol", "state": robot.get("state", "unknown")}],
+            "services": [
+                {"name": "almond-axol", "state": robot.get("state", "unknown")},
+                *({"name": unit, "state": state} for unit, state in units.items()),
+            ],
             "disk": None,
             # The agent does not run on the Axol's own host, so its RAM is not ours to read.
             "memory": None,
@@ -208,19 +247,30 @@ class AxolAdapter:
             "motors": robot.get("motors"),
         }
 
+    @_holding_bus_lock
     def up(self) -> Outcome:
         """Connect the robot link onto the CAN interfaces the server already holds.
 
         An empty body on purpose: choosing interfaces is a bench decision made in
         the Axol's own UI, and the fleet has no business re-pointing a CAN bus.
+
+        Refused while ``ros`` runs: a connected link would be a second commander
+        on the buses.
         """
+        refusal = self._ros_refusal("connecting Almond's link")
+        if refusal is not None:
+            return refusal
         answered = self._post("/api/robot/connect", {})
         return Outcome(ok=True, message="link connected", detail={"state": answered.get("state", "")})
 
+    @_holding_bus_lock
     def down(self) -> Outcome:
+        """Leave ``ros`` mode if it is on, then disconnect Almond's link."""
+        failure = self._leave_ros()
         answered = self._post("/api/robot/disconnect", {})
-        return Outcome(ok=True, message="link disconnected", detail={"state": answered.get("state", "")})
+        return _halted(failure, "link disconnected", answered)
 
+    @_holding_bus_lock
     def set_mode(self, config: str, args: dict[str, str] | None = None) -> Outcome:
         """Stop whatever operation runs and start the one this mode names.
 
@@ -231,9 +281,14 @@ class AxolAdapter:
         (422 dict_type), so every mode switch and every recording start over the
         fabric failed until this was found on hardware.
         """
+        if config == ROS_MODE:
+            return self._enter_ros(args)
         operation = MODES.get(config)
         if operation is None:
-            return Outcome(ok=False, message=f"unknown mode {config!r}; expected one of {sorted(MODES)}")
+            return Outcome(ok=False, message=f"unknown mode {config!r}; expected one of {list(ALL_MODES)}")
+        refusal = self._ros_refusal(f"mode {config}")
+        if refusal is not None:
+            return refusal
         supplied = dict(args or {})
         if config == POLICY_MODE:
             missing = [field for field in RUN_POLICY_REQUIRED if not supplied.get(field)]
@@ -270,7 +325,7 @@ class AxolAdapter:
                 key=MODE_ALIAS,
                 value=self.status()["mode"],
                 klass=MODE,
-                options=tuple(sorted(MODES)),
+                options=ALL_MODES,
                 help="The operation this robot is running.",
             )
         ]
@@ -378,6 +433,7 @@ class AxolAdapter:
     def perception_debug(self, enabled: bool) -> Outcome:
         return Outcome(ok=False, message="the Axol runs no perception node")
 
+    @_holding_bus_lock
     def record(self, dataset: str, action: str, task: str = "", note: str = "", episode: str = "") -> Outcome:
         """Start or stop `collect-data`, which takes a dataset and nothing else.
 
@@ -394,6 +450,9 @@ class AxolAdapter:
         if note or episode:
             return Outcome(ok=False, message=f"the Axol's {RECORD_OPERATION} takes no stop note or episode check")
         if action == "start":
+            refusal = self._ros_refusal("recording")
+            if refusal is not None:
+                return refusal
             started = self._post(
                 "/api/op/start",
                 {"op": RECORD_OPERATION, "args": {"repo_id": self._repo_id(dataset)}},
@@ -406,15 +465,20 @@ class AxolAdapter:
         stopped = self._stop_operation()
         return Outcome(ok=True, message="recording stopped", detail={"episode": str(stopped.get("id", ""))})
 
+    @_holding_bus_lock
     def stop(self) -> Outcome:
         """Stop the running operation and disconnect the motors.
 
         The Axol's own halt, and the strongest one it has: a disconnected link
         holds no motor. Not an emergency stop — no e-stop exists on this robot.
+
+        ``ros`` mode stops first: while it runs, the core is the process on the
+        buses, not Almond.
         """
+        failure = self._leave_ros()
         self._stop_operation()
         answered = self._post("/api/robot/disconnect", {})
-        return Outcome(ok=True, message="motors disconnected", detail={"state": answered.get("state", "")})
+        return _halted(failure, "motors disconnected", answered)
 
     def episodes(self, dataset: str) -> list[dict]:
         """Episodes in a LeRobot dataset on this host, from its own index."""
@@ -512,6 +576,47 @@ class AxolAdapter:
         base = Path(home) if home else Path.home() / ".cache" / "huggingface" / "lerobot"
         return base / self.dataset_owner / dataset
 
+    # --- ros mode ------------------------------------------------------------
+
+    def _enter_ros(self, args: dict[str, str] | None) -> Outcome:
+        """Hand the CAN buses from Almond to fm-axol's core and ROS container.
+
+        Refused while an operation runs, read off the robot exactly as the motion
+        guard reads it. Almond's link is disconnected before the core starts, so
+        the buses have one commander at every moment of the handover. A failed
+        start has already stopped both units when it returns.
+
+        The check guards what the agent is asked for. An operation started from
+        Almond's own web UI between the check and the start is not seen here.
+        """
+        if args:
+            return Outcome(ok=False, message=f"mode {ROS_MODE} takes no arguments")
+        if self.ros.active():
+            return Outcome(ok=True, message=f"mode {ROS_MODE}", detail={"mode": ROS_MODE})
+        if self._get("/api/op/status").get("running"):
+            return Outcome(ok=False, message=f"an Almond operation is running; stop it before mode {ROS_MODE}")
+        self._post("/api/robot/disconnect", {})
+        failure = self.ros.start()
+        if failure is not None:
+            return Outcome(ok=False, message=f"mode {ROS_MODE} did not start, both units stopped: {failure}")
+        return Outcome(ok=True, message=f"mode {ROS_MODE}", detail={"mode": ROS_MODE})
+
+    def _ros_refusal(self, what: str) -> Outcome | None:
+        """Refuse an Almond operation while ``ros`` mode holds the buses."""
+        if self.ros.active():
+            return Outcome(ok=False, message=f"{what} refused: mode {ROS_MODE} is on; stop it first")
+        return None
+
+    def _leave_ros(self) -> str | None:
+        """Stop the ROS stack if it runs. ``None`` on success, else the reason.
+
+        Only when it runs: a stock Axol has no fm-axol units, and stopping a unit
+        that is not loaded fails, which would turn every ``stop`` into an error.
+        """
+        if not self.ros.active():
+            return None
+        return self.ros.stop()
+
     # --- the Axol server -----------------------------------------------------
 
     def _stop_operation(self) -> dict:
@@ -555,6 +660,14 @@ class AxolAdapter:
             if operation == operation_id:
                 return mode
         return None
+
+
+def _halted(ros_failure: str | None, message: str, answered: dict) -> Outcome:
+    """The reply to `stop` or `down`, which fails when the ROS stack did not stop."""
+    detail = {"state": answered.get("state", "")}
+    if ros_failure is not None:
+        return Outcome(ok=False, message=f"{message}, but mode {ROS_MODE} did not stop: {ros_failure}", detail=detail)
+    return Outcome(ok=True, message=message, detail=detail)
 
 
 def lerobot_v3_episodes(root: Path) -> list[dict]:

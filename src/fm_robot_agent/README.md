@@ -83,6 +83,7 @@ robot.
 | `anvil.py` | the Anvil workcell: compose, the webapp's tRPC lane, ros2 services, the collection loop's script |
 | `trpc.py` | the webapp's tRPC-over-WebSocket protocol, the two call shapes |
 | `axol.py` | the Almond Axol: its HTTPS server, and its telemetry as JointState |
+| `axol_ros.py` | the Axol's `ros` mode: fm-axol's two systemd units, started and stopped in order |
 | `cdr.py` | CDR encoding, so an Axol reaches the fabric looking like a ROS rig |
 | `fake.py` | a robot that exists only in memory, for the suite and `--fake` |
 | `service.py` | the Zenoh session, the queryable, and the fabric watch a severing write is verified against |
