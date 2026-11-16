@@ -111,6 +111,7 @@ fm robot list                                        every robot on the fabric
 fm robot fm-rob-01 status --json
 fm robot fm-rob-01 up
 fm robot fm-rob-01 mode openarm_v2_quest_teleop.yaml
+fm robot fm-rob-02 mode ros                          hand the Axol's buses to fm-axol
 fm robot fm-rob-01 config get
 fm robot fm-rob-01 config set CYCLONEDDS_VERBOSITY=fine
 fm robot fm-rob-01 config rollback
@@ -308,6 +309,25 @@ rclpy is. Between `go` and `home` the arms hold on their trajectory controllers,
 so teleop and the policy do not drive them; `home` gives them back. `stop`
 pauses the hardware as always.
 
+## Axol ROS Mode
+
+`mode ros` on the Axol runs fm-axol's ROS stack in place of an Almond
+operation. Only one process may command the CAN buses, so the two exclude each
+other:
+
+```
+mode ros   refused while an Almond operation runs (teleop, gravity-comp, policy, recording)
+           disconnects Almond's link, then starts fm-axol-core.service, then fm-axol-ros.service
+           a unit that fails or is not active after start stops both units again
+while on   mode, record start and up are refused; status reports mode ros and both units
+stop/down  stop fm-axol-ros.service, then fm-axol-core.service, then disconnect as always
+```
+
+fm-axol installs both units, not enabled at boot, and a polkit rule that lets
+the robot's login user start and stop exactly those two, so the agent runs
+plain `systemctl` with no sudo. The guard covers what the agent is asked for;
+an operation started from Almond's own web UI goes around it.
+
 ## Perception Debug
 
 The perception node publishes its debug frames (every candidate, mask and gate
@@ -342,12 +362,14 @@ kept under `agent/` as the baseline. The Zenoh port replaces it.
 
 The agent exposes no motion topic and subscribes to no command topic. `stop`
 maps to the robot vendor's own pause or disconnect, never to anything this repo
-invents.
+invents. On an Axol in `ros` mode it first stops fm-axol's two units, so the
+process on the buses is gone before Almond's disconnect runs.
 
 The fabric never sends a pose, trajectory or command topic. It can start and
 stop supervised behaviours that move the arm: `collect` on the Anvil, only once
 armed locally and behind the robot's own preflight, and the Axol's
-`run-policy`.
+`run-policy`. The Axol's `ros` mode starts fm-axol's stack, which takes motion
+commands from ROS on the robot's own loopback, never from the fabric.
 
 No configuration key commands motion either. The keys that shape how the arms
 move are refused unless the robot reports itself idle — a compose stack that is

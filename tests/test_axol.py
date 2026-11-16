@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import subprocess
+import threading
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -10,12 +12,15 @@ from pathlib import Path
 import pytest
 
 from fm_robot_agent.axol import (
+    ALL_MODES,
     KIND,
     MODES,
     RECORD_OPERATION,
+    ROS_MODE,
     AxolAdapter,
     _frame_to_joint_state,
 )
+from fm_robot_agent.axol_ros import CORE_UNIT, ROS_UNIT
 from fm_robot_agent.config import MODE, MODE_ALIAS, MOTION, TUNING
 from fm_robot_agent.protocol import AdapterError
 
@@ -94,6 +99,12 @@ def server(monkeypatch):
 
     monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
     return stub
+
+
+@pytest.fixture(autouse=True)
+def units(systemctl):
+    """Every test here reads the fm-axol units, so none reaches the host's systemctl."""
+    return systemctl
 
 
 @pytest.fixture
@@ -228,6 +239,119 @@ def test_switching_mode_with_nothing_running_still_starts(adapter, server):
     """`/api/op/stop` answers 404 when idle; that is not a failure to report."""
     assert adapter.set_mode("teleop").ok is True
     assert server.running_op == "teleop"
+
+
+# --- ros mode ----------------------------------------------------------------
+
+
+def test_ros_mode_disconnects_almond_then_starts_core_then_container(adapter, server, units):
+    outcome = adapter.set_mode(ROS_MODE)
+
+    assert outcome.ok is True
+    assert server.state == "disconnected", "Almond's link must let go of the buses first"
+    assert units.changes() == [("start", CORE_UNIT), ("start", ROS_UNIT)]
+    reported = adapter.status()
+    assert reported["mode"] == ROS_MODE
+    assert ROS_MODE in reported["modes"]
+    assert {"name": CORE_UNIT, "state": "active"} in reported["services"]
+
+
+@pytest.mark.parametrize("operation", ["teleop", "gravity-comp"])
+def test_ros_mode_refuses_while_an_almond_operation_runs(adapter, server, units, operation):
+    adapter.set_mode(operation)
+
+    outcome = adapter.set_mode(ROS_MODE)
+
+    assert outcome.ok is False
+    assert "Almond operation is running" in outcome.message
+    assert units.changes() == []
+    assert server.running_op == operation
+
+
+def test_ros_mode_refuses_while_recording(adapter, server, units):
+    adapter.record("pick-place", "start")
+    assert adapter.set_mode(ROS_MODE).ok is False
+    assert units.changes() == []
+
+
+def test_a_failed_ros_start_rolls_both_units_back(adapter, units):
+    units.fail_start.add(ROS_UNIT)
+
+    outcome = adapter.set_mode(ROS_MODE)
+
+    assert outcome.ok is False
+    assert "both units stopped" in outcome.message
+    assert units.changes()[-2:] == [("stop", ROS_UNIT), ("stop", CORE_UNIT)]
+    assert adapter.status()["mode"] is None
+
+
+def test_ros_mode_takes_no_arguments(adapter, units):
+    assert adapter.set_mode(ROS_MODE, {"policy_path": "x"}).ok is False
+    assert units.changes() == []
+
+
+def test_ros_mode_twice_starts_nothing_twice(adapter, units):
+    adapter.set_mode(ROS_MODE)
+    units.calls.clear()
+    assert adapter.set_mode(ROS_MODE).ok is True
+    assert units.changes() == []
+
+
+@pytest.mark.parametrize(
+    "request_operation",
+    [
+        lambda a: a.set_mode("teleop"),
+        lambda a: a.set_mode("gravity-comp"),
+        lambda a: a.set_mode("policy", {"policy_path": "p", "policy_type": "act", "task": "t"}),
+        lambda a: a.record("pick-place", "start"),
+        lambda a: a.config_write(MODE_ALIAS, "teleop"),
+        lambda a: a.up(),
+    ],
+    ids=["teleop", "gravity-comp", "policy", "record", "config-mode", "up"],
+)
+def test_almond_operations_refuse_while_ros_mode_is_on(adapter, server, request_operation):
+    adapter.set_mode(ROS_MODE)
+    server.requests.clear()
+
+    outcome = request_operation(adapter)
+
+    assert outcome.ok is False
+    assert "mode ros is on" in outcome.message
+    assert not {"/api/op/start", "/api/robot/connect"} & set(server.paths())
+
+
+def test_stop_ends_ros_mode_container_first_and_frees_almond(adapter, server, units):
+    adapter.set_mode(ROS_MODE)
+    units.calls.clear()
+
+    outcome = adapter.stop()
+
+    assert outcome.ok is True
+    assert units.changes() == [("stop", ROS_UNIT), ("stop", CORE_UNIT)]
+    assert adapter.set_mode("teleop").ok is True
+
+
+def test_down_ends_ros_mode(adapter, units):
+    adapter.set_mode(ROS_MODE)
+    assert adapter.down().ok is True
+    assert adapter.status()["mode"] is None
+
+
+def test_a_ros_stack_that_will_not_stop_fails_the_stop(adapter, server, units):
+    adapter.set_mode(ROS_MODE)
+    units.fail_stop.add(CORE_UNIT)
+
+    outcome = adapter.stop()
+
+    assert outcome.ok is False
+    assert CORE_UNIT in outcome.message
+    assert server.state == "disconnected"
+
+
+def test_stop_on_a_stock_axol_touches_no_unit(adapter, units):
+    """A unit that is not loaded fails to stop; an idle stack is never asked to."""
+    assert adapter.stop().ok is True
+    assert units.changes() == []
 
 
 # --- recording ---------------------------------------------------------------
@@ -579,7 +703,7 @@ def test_config_read_carries_the_stored_value_over_the_default(adapter, settings
 def test_the_mode_is_a_config_key_like_any_other(adapter, settings_server):
     mode = settings(adapter)[MODE_ALIAS]
     assert mode.klass == MODE
-    assert mode.options == tuple(sorted(MODES))
+    assert mode.options == ALL_MODES
 
 
 def test_a_tuning_setting_is_written_through(adapter, settings_server):
@@ -685,3 +809,30 @@ def test_there_is_no_collection_loop(adapter, server):
 def test_there_is_no_perception_node(adapter, server):
     outcome = adapter.perception_debug(True)
     assert not outcome.ok and "no perception node" in outcome.message
+
+
+
+def test_a_bus_check_and_its_action_run_under_one_lock(adapter, units, monkeypatch):
+    """Queries run on their own threads; a check released before its action is a race."""
+    entered = threading.Event()
+    release = threading.Event()
+
+    def slow_start(argv, **kwargs):
+        if argv[1:] == ["start", CORE_UNIT]:
+            entered.set()
+            release.wait(5)
+        return units.run(argv, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", slow_start)
+    starter = threading.Thread(target=adapter.set_mode, args=(ROS_MODE,))
+    starter.start()
+    assert entered.wait(5)
+    results = []
+    racer = threading.Thread(target=lambda: results.append(adapter.up()))
+    racer.start()
+    racer.join(0.2)
+    assert racer.is_alive(), "up must wait for the ros start in flight"
+    release.set()
+    starter.join(5)
+    racer.join(5)
+    assert results[0].ok is False and "mode ros is on" in results[0].message
