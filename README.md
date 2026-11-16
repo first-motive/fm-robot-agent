@@ -312,19 +312,23 @@ pauses the hardware as always.
 ## Axol ROS Mode
 
 `mode ros` on the Axol runs fm-axol's ROS stack in place of an Almond
-operation. Only one process may command the CAN buses, so the two exclude each
-other:
+operation. Only one process may command the CAN buses, and a ZED camera opens
+in one process, so the two exclude each other:
 
 ```
 mode ros   refused while an Almond operation runs (teleop, gravity-comp, policy, recording)
            disconnects Almond's link, then starts fm-axol-core.service, then fm-axol-ros.service
            a unit that fails or is not active after start stops both units again
-while on   mode, record start and up are refused; status reports mode ros and both units
-stop/down  stop fm-axol-ros.service, then fm-axol-core.service, then disconnect as always
+           then starts fm-axol-zed.service; a camera failure still enters the mode
+           and the reply names it ("mode ros, without cameras: ...")
+while on   mode, record start and up are refused; status reports mode ros and all three units
+           the agent publishes no joint_states; the ROS graph's broadcaster does, through fm-comms
+stop/down  stop fm-axol-zed.service if it runs, then fm-axol-ros.service, then
+           fm-axol-core.service, then disconnect as always; Almond streams the cameras again
 ```
 
-fm-axol installs both units, not enabled at boot, and `/etc/sudoers.d/fm-axol`,
-which lets the robot's login user start and stop exactly those two with no
+fm-axol installs the three units, not enabled at boot, and `/etc/sudoers.d/fm-axol`,
+which lets the robot's login user start and stop exactly those units with no
 password. The agent runs `/usr/bin/sudo -n /usr/bin/systemctl start|stop <one unit>`,
 spelled exactly as the rule is, so the match holds and sudo never prompts; a
 refusal fails the mode start and names the rule. `is-active` stays plain
@@ -365,7 +369,7 @@ kept under `agent/` as the baseline. The Zenoh port replaces it.
 
 The agent exposes no motion topic and subscribes to no command topic. `stop`
 maps to the robot vendor's own pause or disconnect, never to anything this repo
-invents. On an Axol in `ros` mode it first stops fm-axol's two units, so the
+invents. On an Axol in `ros` mode it first stops fm-axol's units, so the
 process on the buses is gone before Almond's disconnect runs.
 
 The fabric never sends a pose, trajectory or command topic. It can start and

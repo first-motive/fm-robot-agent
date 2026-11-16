@@ -22,6 +22,8 @@ fm-axol's core and its ROS container (see :mod:`fm_robot_agent.axol_ros`), and
 only one process may command those buses. So ``ros`` refuses while an operation
 runs, disconnects Almond's link before the core starts, and while it is on every
 operation the agent is asked for is refused until ``stop`` or ``down`` ends it.
+The mode also claims the cameras for the ZED driver, and the agent stops
+publishing ``joint_states``, because the ROS graph's own broadcaster does then.
 
 *Datasets are LeRobot repo ids.* A repo id carries a ``/``, which is exactly the
 character a dataset name may not contain. The owner half is configuration, the
@@ -131,6 +133,11 @@ OWNER_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 #: no upsampling ever fills — the agent forwards frames as they arrive and drops
 #: any that would exceed it, rather than inventing samples between them.
 TELEMETRY_MAX_HZ = 20.0
+
+#: How often telemetry rereads whether ``ros`` mode is on. A read is a few
+#: ``systemctl is-active`` calls, too many to spend on every frame, and a mode
+#: switch takes far longer than a second anyway.
+ROS_CHECK_INTERVAL_S = 1.0
 
 REQUEST_TIMEOUT_S = 10.0
 
@@ -533,6 +540,11 @@ class AxolAdapter:
         is where the one becomes the other, so the desktop decodes both robots
         with one decoder.
 
+        Nothing is yielded while ``ros`` mode is on. The ROS graph's
+        joint_state_broadcaster publishes the same key then, through fm-comms'
+        bridge, and two sources on one key interleave two joint orders. The
+        socket is still read, so frames resume the moment the mode ends.
+
         A dropped socket ends the generator; the caller decides whether to
         reconnect.
         """
@@ -544,6 +556,8 @@ class AxolAdapter:
         url = self.base_url.replace("https://", "wss://").replace("http://", "ws://")
         minimum_gap_s = 1.0 / TELEMETRY_MAX_HZ
         last_sent = 0.0
+        ros_checked = float("-inf")
+        ros_on = False
         socket_url = f"{url}/api/telemetry/ws"
         with connect(
             socket_url, open_timeout=REQUEST_TIMEOUT_S, ssl=_ssl_context(socket_url)
@@ -556,6 +570,11 @@ class AxolAdapter:
                 if frame.get("type") != "frame":
                     continue
                 now = time.time()
+                if now - ros_checked >= ROS_CHECK_INTERVAL_S:
+                    ros_checked = now
+                    ros_on = self.ros.active()
+                if ros_on:
+                    continue
                 if now - last_sent < minimum_gap_s:
                     continue
                 last_sent = now
@@ -586,6 +605,9 @@ class AxolAdapter:
         the buses have one commander at every moment of the handover. A failed
         start has tried to stop both units, and its reason says whether it did.
 
+        The cameras start once the stack is up. A camera failure still enters
+        the mode, since motion needs no camera, and the reply carries the reason.
+
         The check guards what the agent is asked for. An operation started from
         Almond's own web UI between the check and the start is not seen here.
         """
@@ -599,6 +621,13 @@ class AxolAdapter:
         failure = self.ros.start()
         if failure is not None:
             return Outcome(ok=False, message=f"mode {ROS_MODE} did not start: {failure}")
+        camera_failure = self.ros.start_cameras()
+        if camera_failure is not None:
+            return Outcome(
+                ok=True,
+                message=f"mode {ROS_MODE}, without cameras: {camera_failure}",
+                detail={"mode": ROS_MODE, "camera_failure": camera_failure},
+            )
         return Outcome(ok=True, message=f"mode {ROS_MODE}", detail={"mode": ROS_MODE})
 
     def _ros_refusal(self, what: str) -> Outcome | None:
@@ -608,12 +637,14 @@ class AxolAdapter:
         return None
 
     def _leave_ros(self) -> str | None:
-        """Stop the ROS stack if it runs. ``None`` on success, else the reason.
+        """Stop the ROS stack if any of it runs. ``None`` on success, else the reason.
 
         Only when it runs: a stock Axol has no fm-axol units, and stopping a unit
         that is not loaded fails, which would turn every ``stop`` into an error.
+        A camera unit still up after its core died counts as running, so leaving
+        the mode always hands the cameras back to Almond.
         """
-        if not self.ros.active():
+        if self.ros.idle():
             return None
         return self.ros.stop()
 

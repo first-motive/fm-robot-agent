@@ -16,11 +16,12 @@ from fm_robot_agent.axol import (
     KIND,
     MODES,
     RECORD_OPERATION,
+    ROS_CHECK_INTERVAL_S,
     ROS_MODE,
     AxolAdapter,
     _frame_to_joint_state,
 )
-from fm_robot_agent.axol_ros import CORE_UNIT, ROS_UNIT, SUDOERS_RULE
+from fm_robot_agent.axol_ros import CAMERA_UNIT, CORE_UNIT, ROS_UNIT, SUDOERS_RULE
 from fm_robot_agent.config import MODE, MODE_ALIAS, MOTION, TUNING
 from fm_robot_agent.protocol import AdapterError
 
@@ -244,12 +245,12 @@ def test_switching_mode_with_nothing_running_still_starts(adapter, server):
 # --- ros mode ----------------------------------------------------------------
 
 
-def test_ros_mode_disconnects_almond_then_starts_core_then_container(adapter, server, units):
+def test_ros_mode_disconnects_almond_then_starts_core_then_container_then_cameras(adapter, server, units):
     outcome = adapter.set_mode(ROS_MODE)
 
     assert outcome.ok is True
     assert server.state == "disconnected", "Almond's link must let go of the buses first"
-    assert units.changes() == [("start", CORE_UNIT), ("start", ROS_UNIT)]
+    assert units.changes() == [("start", CORE_UNIT), ("start", ROS_UNIT), ("start", CAMERA_UNIT)]
     reported = adapter.status()
     assert reported["mode"] == ROS_MODE
     assert ROS_MODE in reported["modes"]
@@ -266,6 +267,35 @@ def test_ros_mode_refuses_while_an_almond_operation_runs(adapter, server, units,
     assert "Almond operation is running" in outcome.message
     assert units.changes() == []
     assert server.running_op == operation
+
+
+def test_a_camera_failure_still_enters_ros_mode_and_says_so(adapter, units):
+    """Motion needs no camera; the reply and status still name the failure."""
+    units.fail_start.add(CAMERA_UNIT)
+
+    outcome = adapter.set_mode(ROS_MODE)
+
+    assert outcome.ok is True
+    assert CAMERA_UNIT in outcome.message and "without cameras" in outcome.message
+    assert CAMERA_UNIT in outcome.detail["camera_failure"]
+    reported = adapter.status()
+    assert reported["mode"] == ROS_MODE
+    assert {"name": CAMERA_UNIT, "state": "inactive"} in reported["services"]
+
+
+def test_a_camera_that_dies_on_start_is_reported_in_status(adapter, units):
+    units.die_on_start.add(CAMERA_UNIT)
+
+    outcome = adapter.set_mode(ROS_MODE)
+
+    assert outcome.ok is True and f"{CAMERA_UNIT} is failed after start" in outcome.message
+    assert {"name": CAMERA_UNIT, "state": "failed"} in adapter.status()["services"]
+
+
+def test_a_failed_ros_start_never_starts_the_cameras(adapter, units):
+    units.fail_start.add(ROS_UNIT)
+    adapter.set_mode(ROS_MODE)
+    assert ("start", CAMERA_UNIT) not in units.changes()
 
 
 def test_ros_mode_refuses_while_recording(adapter, server, units):
@@ -330,15 +360,31 @@ def test_almond_operations_refuse_while_ros_mode_is_on(adapter, server, request_
     assert not {"/api/op/start", "/api/robot/connect"} & set(server.paths())
 
 
-def test_stop_ends_ros_mode_container_first_and_frees_almond(adapter, server, units):
+def test_stop_ends_ros_mode_cameras_first_and_frees_almond(adapter, server, units):
     adapter.set_mode(ROS_MODE)
     units.calls.clear()
 
     outcome = adapter.stop()
 
     assert outcome.ok is True
-    assert units.changes() == [("stop", ROS_UNIT), ("stop", CORE_UNIT)]
+    assert units.changes() == [("stop", CAMERA_UNIT), ("stop", ROS_UNIT), ("stop", CORE_UNIT)]
     assert adapter.set_mode("teleop").ok is True
+
+
+def test_stop_releases_cameras_left_running_after_the_core_died(adapter, server, units):
+    """Almond cannot stream a camera the ZED driver still holds."""
+    adapter.set_mode(ROS_MODE)
+    units.states[CORE_UNIT] = units.states[ROS_UNIT] = "failed"
+    units.calls.clear()
+
+    assert adapter.stop().ok is True
+    assert ("stop", CAMERA_UNIT) in units.changes()
+    assert units.states[CAMERA_UNIT] == "inactive"
+
+
+def test_a_stock_axol_stop_touches_no_unit(adapter, units):
+    assert adapter.stop().ok is True
+    assert units.changes() == []
 
 
 def test_down_ends_ros_mode(adapter, units):
@@ -581,6 +627,44 @@ def test_telemetry_forwards_again_once_the_gap_has_passed(monkeypatch):
     clock = iter([100.0, 200.0, 300.0, 400.0])
     monkeypatch.setattr(axol_module.time, "time", lambda: next(clock))
     assert len(list(AxolAdapter().telemetry())) == 3
+
+
+def frames_while(units, states):
+    """One motor frame per entry, each sent with the core in that state."""
+    frame = json.dumps({"type": "frame", "t": 1.0, "m": {"left:SHOULDER_1": [1.0, 2.0, 3.0]}})
+    for state in states:
+        units.states[CORE_UNIT] = state
+        yield frame
+
+
+def test_telemetry_yields_joint_states_to_the_ros_graph(monkeypatch, units):
+    """While ros mode runs, the ROS graph's broadcaster is the key's one source."""
+    import fm_robot_agent.axol as axol_module
+
+    patch_socket(monkeypatch, frames_while(units, ["active"] * 3))
+    clock = iter([100.0, 200.0, 300.0])
+    monkeypatch.setattr(axol_module.time, "time", lambda: next(clock))
+    assert list(AxolAdapter().telemetry()) == []
+
+
+def test_telemetry_resumes_once_ros_mode_ends(monkeypatch, units):
+    import fm_robot_agent.axol as axol_module
+
+    patch_socket(monkeypatch, frames_while(units, ["active", "active", "inactive", "inactive"]))
+    clock = iter([100.0, 200.0, 300.0, 400.0])
+    monkeypatch.setattr(axol_module.time, "time", lambda: next(clock))
+    assert len(list(AxolAdapter().telemetry())) == 2
+
+
+def test_telemetry_reads_the_units_at_most_once_per_interval(monkeypatch, units):
+    """A state read is a subprocess per unit; a frame rate of them is not free."""
+    import fm_robot_agent.axol as axol_module
+
+    patch_socket(monkeypatch, frames_while(units, ["inactive"] * 4))
+    clock = iter([100.0, 100.0 + ROS_CHECK_INTERVAL_S / 2, 100.0 + ROS_CHECK_INTERVAL_S, 100.0 + ROS_CHECK_INTERVAL_S * 1.5])
+    monkeypatch.setattr(axol_module.time, "time", lambda: next(clock))
+    list(AxolAdapter().telemetry())
+    assert units.calls.count(("is-active", CORE_UNIT)) == 2
 
 
 # --- TLS ---------------------------------------------------------------------

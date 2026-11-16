@@ -34,7 +34,8 @@ from fm_robot_agent.verbs import KEY_PREFIX, answer
 
 #: The topic the fleet watches a robot through, and therefore the one a severing
 #: config change is verified against. The Anvil's crosses through
-#: ``zenoh-bridge-ros2dds``; the Axol's is published by this process.
+#: ``zenoh-bridge-ros2dds``; the Axol's is published by this process, except in
+#: ``ros`` mode, when fm-comms bridges the Axol's ROS graph onto the same key.
 TELEMETRY_TOPIC = "joint_states"
 
 #: Which adapter drives which card kind. The adapters land one per robot; the
