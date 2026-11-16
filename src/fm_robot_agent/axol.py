@@ -584,7 +584,7 @@ class AxolAdapter:
         Refused while an operation runs, read off the robot exactly as the motion
         guard reads it. Almond's link is disconnected before the core starts, so
         the buses have one commander at every moment of the handover. A failed
-        start has already stopped both units when it returns.
+        start has tried to stop both units, and its reason says whether it did.
 
         The check guards what the agent is asked for. An operation started from
         Almond's own web UI between the check and the start is not seen here.
@@ -598,7 +598,7 @@ class AxolAdapter:
         self._post("/api/robot/disconnect", {})
         failure = self.ros.start()
         if failure is not None:
-            return Outcome(ok=False, message=f"mode {ROS_MODE} did not start, both units stopped: {failure}")
+            return Outcome(ok=False, message=f"mode {ROS_MODE} did not start: {failure}")
         return Outcome(ok=True, message=f"mode {ROS_MODE}", detail={"mode": ROS_MODE})
 
     def _ros_refusal(self, what: str) -> Outcome | None:

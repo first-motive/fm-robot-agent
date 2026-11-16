@@ -1,9 +1,13 @@
 """The fm-axol ROS stack, as two systemd units the agent starts and stops.
 
-fm-axol installs both units and a polkit rule that lets the robot's login user
-start, stop and query exactly these two without sudo, so every call here is a
-plain ``systemctl``. Neither unit is enabled at boot: the stack runs only while
-the Axol adapter's ``ros`` mode is on.
+fm-axol installs both units and ``/etc/sudoers.d/fm-axol``, which lets the
+robot's login user run ``/usr/bin/systemctl start|stop|restart`` on exactly
+these two, one unit per command, with no password. Starts and stops therefore
+run as :data:`PRIVILEGED_SYSTEMCTL` with one unit, so the argv matches a
+sudoers line exactly; ``-n`` makes sudo refuse rather than wait for a password
+no one will type. ``is-active`` needs no privilege and stays plain
+``systemctl``. Neither unit is enabled at boot: the stack runs only while the
+Axol adapter's ``ros`` mode is on.
 
     fm-axol-core.service   the host core, the one process on the CAN buses
     fm-axol-ros.service    the Jazzy container, through docker compose
@@ -22,6 +26,20 @@ ROS_UNIT = "fm-axol-ros.service"
 
 #: Start order. Stops run it backwards.
 UNITS = (CORE_UNIT, ROS_UNIT)
+
+#: The prefix every start and stop runs under. The systemctl path is part of the
+#: sudoers match, so it is spelled exactly as fm-axol's rule spells it; sudo's own
+#: path is absolute so the service's PATH never picks which sudo runs.
+PRIVILEGED_SYSTEMCTL = ("/usr/bin/sudo", "-n", "/usr/bin/systemctl")
+
+#: Where the rule that grants these units lives, named in a refusal.
+SUDOERS_RULE = "/etc/sudoers.d/fm-axol"
+
+#: How sudo words a refusal. With ``-n`` and no matching NOPASSWD line it says
+#: ``sudo: a password is required``; a user with no rule at all, or with an argv
+#: the rule does not match, gets ``Sorry, user ... is not allowed to execute``
+#: or ``Sorry, user ... may not run sudo``, which carry no ``sudo:`` prefix.
+SUDO_REFUSALS = ("sudo:", "Sorry, user ")
 
 #: What a state read reports when ``systemctl`` hangs or answers nothing.
 UNRESPONSIVE = "unresponsive"
@@ -62,15 +80,19 @@ class RosStack:
     def start(self) -> str | None:
         """Start the core, then the container. ``None`` on success, else the reason.
 
-        A failure stops both units before it returns, whichever got started.
+        A failure stops both units before it returns, whichever got started, and
+        the reason says whether that rollback stopped them: a refused stop leaves
+        the core on the buses, and a reply claiming otherwise would hide it.
         """
         for unit in UNITS:
             failure = self._systemctl("start", unit)
             if failure is None and (state := self._state(unit)) != "active":
                 failure = f"{unit} is {state} after start"
             if failure is not None:
-                self.stop()
-                return failure
+                rollback = self.stop()
+                if rollback is not None:
+                    return f"{failure}; rollback did not stop the units: {rollback}"
+                return f"{failure}; both units stopped"
         return None
 
     def stop(self) -> str | None:
@@ -98,10 +120,10 @@ class RosStack:
         return done.stdout.strip() or UNRESPONSIVE
 
     def _systemctl(self, action: str, unit: str) -> str | None:
-        """Run one start or stop, returning ``None`` or why it failed."""
+        """Run one start or stop under sudo, returning ``None`` or why it failed."""
         try:
             done = subprocess.run(
-                ["systemctl", action, unit],
+                [*PRIVILEGED_SYSTEMCTL, action, unit],
                 capture_output=True,
                 text=True,
                 timeout=SYSTEMCTL_TIMEOUT_S,
@@ -113,5 +135,9 @@ class RosStack:
             return f"systemctl {action} {unit} could not run: {exc}"
         if done.returncode != 0:
             reason = (done.stderr or done.stdout).strip() or f"exit {done.returncode}"
+            # A refusal by sudo is told apart from a unit that started and failed,
+            # so a missing or narrower rule reads as one.
+            if reason.startswith(SUDO_REFUSALS):
+                return f"sudo refused systemctl {action} {unit}; check {SUDOERS_RULE} from fm-axol's install ({reason})"
             return f"systemctl {action} {unit} failed: {reason}"
         return None

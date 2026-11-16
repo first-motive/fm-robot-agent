@@ -323,9 +323,12 @@ while on   mode, record start and up are refused; status reports mode ros and bo
 stop/down  stop fm-axol-ros.service, then fm-axol-core.service, then disconnect as always
 ```
 
-fm-axol installs both units, not enabled at boot, and a polkit rule that lets
-the robot's login user start and stop exactly those two, so the agent runs
-plain `systemctl` with no sudo. The guard covers what the agent is asked for;
+fm-axol installs both units, not enabled at boot, and `/etc/sudoers.d/fm-axol`,
+which lets the robot's login user start and stop exactly those two with no
+password. The agent runs `/usr/bin/sudo -n /usr/bin/systemctl start|stop <one unit>`,
+spelled exactly as the rule is, so the match holds and sudo never prompts; a
+refusal fails the mode start and names the rule. `is-active` stays plain
+`systemctl`. The guard covers what the agent is asked for;
 an operation started from Almond's own web UI goes around it.
 
 ## Perception Debug
