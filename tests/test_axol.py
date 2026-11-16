@@ -20,7 +20,7 @@ from fm_robot_agent.axol import (
     AxolAdapter,
     _frame_to_joint_state,
 )
-from fm_robot_agent.axol_ros import CORE_UNIT, ROS_UNIT
+from fm_robot_agent.axol_ros import CORE_UNIT, ROS_UNIT, SUDOERS_RULE
 from fm_robot_agent.config import MODE, MODE_ALIAS, MOTION, TUNING
 from fm_robot_agent.protocol import AdapterError
 
@@ -282,6 +282,16 @@ def test_a_failed_ros_start_rolls_both_units_back(adapter, units):
     assert outcome.ok is False
     assert "both units stopped" in outcome.message
     assert units.changes()[-2:] == [("stop", ROS_UNIT), ("stop", CORE_UNIT)]
+    assert adapter.status()["mode"] is None
+
+
+def test_a_sudo_refusal_fails_ros_mode_with_a_clear_reason(adapter, units):
+    units.sudo_refusal = "sudo: a password is required\n"
+
+    outcome = adapter.set_mode(ROS_MODE)
+
+    assert outcome.ok is False
+    assert "sudo refused" in outcome.message and SUDOERS_RULE in outcome.message
     assert adapter.status()["mode"] is None
 
 
@@ -818,7 +828,7 @@ def test_a_bus_check_and_its_action_run_under_one_lock(adapter, units, monkeypat
     release = threading.Event()
 
     def slow_start(argv, **kwargs):
-        if argv[1:] == ["start", CORE_UNIT]:
+        if argv[-2:] == ["start", CORE_UNIT]:
             entered.set()
             release.wait(5)
         return units.run(argv, **kwargs)
