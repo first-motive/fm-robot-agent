@@ -221,6 +221,7 @@ class AxolAdapter:
         running = bool(operation.get("running"))
         units = self.ros.states()
         ros_on = holds_buses(units)
+        motors = robot.get("motors")
         return {
             # `command` holds the operation id — Session.to_dict() in the Axol's
             # own manager spells it that way, and nothing spells it `op`.
@@ -251,7 +252,11 @@ class AxolAdapter:
             # What the field actually tracks is Almond's business; this repo
             # reports it because the desktop shows it, not because it decides
             # anything.
-            "motors": robot.get("motors"),
+            "motor_states": motors,
+            # A count, as the SO-101 sends and the desktop decodes. Almond has
+            # sent the detail as a map and as a list; a consumer that expects a
+            # number drops the whole robot when it gets either.
+            "motors": len(motors) if isinstance(motors, (dict, list)) else None,
         }
 
     @_holding_bus_lock

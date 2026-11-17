@@ -38,6 +38,7 @@ class ServerStub:
         self.started_args: dict = {}
         self.state = "connected"
         self.refuse: set[str] = set()
+        self.motors: dict | list | None = {"left:SHOULDER_1": {"reachable": True}}
 
     exited_session: dict | None = None
 
@@ -46,7 +47,7 @@ class ServerStub:
         if path in self.refuse:
             raise urllib.error.HTTPError(path, 409, "Conflict", None, None)
         if path == "/api/robot/status":
-            return {"state": self.state, "motors": {"left:SHOULDER_1": {"reachable": True}}}
+            return {"state": self.state, "motors": self.motors}
         if path == "/api/op/status":
             if self.running_op is not None:
                 return {"running": True, "session": {"id": "s1", "command": self.running_op}}
@@ -136,6 +137,21 @@ def test_status_reports_the_contract_fields(adapter):
     assert reported["hardware"] == "connected"
     assert reported["mode"] is None
     assert reported["recording"] is False
+
+
+@pytest.mark.parametrize(
+    ("detail", "count"),
+    [
+        ({"left:SHOULDER_1": {"reachable": True}}, 1),
+        ([{"arm": "left", "joint": "SHOULDER_1"}, {"arm": "left", "joint": "ELBOW"}], 2),
+        (None, None),
+    ],
+)
+def test_status_counts_motors_whatever_shape_almond_sends(adapter, server, detail, count):
+    server.motors = detail
+    reported = adapter.status()
+    assert reported["motors"] == count
+    assert reported["motor_states"] == detail
 
 
 def test_status_names_the_running_mode_in_fleet_terms(adapter, server):
