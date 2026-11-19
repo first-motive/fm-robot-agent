@@ -85,6 +85,10 @@ class RobotAdapter(Protocol):
 
         Returns at least the keys the wire contract names: ``mode``,
         ``hardware``, ``recording``, ``services``, ``disk``, ``memory``.
+        ``hardware`` and each service's ``state`` read as up only when they
+        are ``connected`` or ``running``; the desktop passes a stack when
+        ``hardware`` and every listed service are, so listing a service under
+        any other word fails the stack.
         ``memory`` is the host's RAM and swap in kB, or ``None`` where the agent
         is not on the robot's host. An adapter may add keys its robot has —
         the Anvil adds ``capture`` and ``replay_buffer`` — and a reader treats a
