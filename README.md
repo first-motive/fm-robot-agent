@@ -321,7 +321,7 @@ mode ros   refused while an Almond operation runs (teleop, gravity-comp, policy,
            a unit that fails or is not active after start stops both units again
            then starts fm-axol-zed.service; a camera failure still enters the mode
            and the reply names it ("mode ros, without cameras: ...")
-while on   mode, record start and up are refused; status reports mode ros and all three units
+while on   mode, record start and up are refused; status reports mode ros and the units (see below)
            the agent publishes no joint_states; the ROS graph's broadcaster does, through fm-comms
 stop/down  stop fm-axol-zed.service if it runs, then fm-axol-ros.service, then
            fm-axol-core.service, then disconnect as always; Almond streams the cameras again
@@ -334,6 +334,26 @@ spelled exactly as the rule is, so the match holds and sudo never prompts; a
 refusal fails the mode start and names the rule. `is-active` stays plain
 `systemctl`. The guard covers what the agent is asked for;
 an operation started from Almond's own web UI goes around it.
+
+`status` reports the stack in the fleet's words: `hardware` is up when it reads
+`connected` or `running`, and so is each service, and the desktop passes the
+stack only when all of them are. Whoever holds the buses is the stack:
+
+```
+mode       condition                          hardware                     services
+ros        core and container active          connected                    the units, active as running
+ros        a bus unit not active              its state (core first)       the units; that one under its own word
+ros        Almond's link also on the buses    almond <state> while ros...  the units
+other      Almond connected or busy           connected                    almond-axol connected
+other      Almond disconnected, error, ...    Almond's state               almond-axol under that state
+```
+
+Almond's link is left out in `ros` mode, where it is disconnected by design.
+An idle unit (`inactive`, `failed`, `absent`) is listed only when it is a bus
+unit in `ros` mode. The camera unit is never required: a stopped camera leaves
+the stack up, the mode reply names its failure, and the desktop's own camera
+check catches the missing previews. A unit in any other state, such as
+`activating` or `unresponsive`, is always listed under its own word.
 
 ## Perception Debug
 

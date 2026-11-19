@@ -45,7 +45,7 @@ import urllib.request
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from fm_robot_agent.axol_ros import RosStack, holds_buses
+from fm_robot_agent.axol_ros import BUS_UNITS, IDLE_STATES, RosStack, holds_buses
 from fm_robot_agent.cdr import joint_state
 from fm_robot_agent.config import (
     MODE,
@@ -141,6 +141,57 @@ ROS_CHECK_INTERVAL_S = 1.0
 
 REQUEST_TIMEOUT_S = 10.0
 
+#: The words the fleet reads as up, for ``hardware`` and for each service. The
+#: SO-101 and the Anvil already send them, and the desktop passes a stack only
+#: when ``hardware`` is one of them and every listed service is too.
+CONNECTED = "connected"
+RUNNING = "running"
+
+#: Almond's link states, from ``robot_link.py`` in almond_axol, that hold the
+#: buses. ``busy`` is a task (teleop, a policy, a recording) owning a connected
+#: link, and Almond's own ``connected`` field counts it as connected. A link
+#: that is ``connecting`` is already opening the buses.
+ALMOND_LINK_UP = ("connected", "busy")
+ALMOND_HOLDS_BUSES = (*ALMOND_LINK_UP, "connecting")
+
+
+def _stack_words(almond_state: str, units: dict[str, str]) -> tuple[str, list[dict]]:
+    """``hardware`` and ``services`` for ``status``, in the fleet's words.
+
+    Whoever holds the buses is the stack. In ``ros`` mode that is fm-axol's core
+    and container, and Almond's link is disconnected by design, so a
+    disconnected link is left out rather than listed as a failed process. A link
+    that holds the buses alongside ROS (an operator connecting from Almond's own
+    UI) is two commanders on one bus, and ``hardware`` says so instead of
+    passing. In every other mode Almond's link is the stack.
+
+    A unit in an idle state is listed only when it is a bus unit in ``ros``
+    mode, where it must run. Otherwise an idle unit is a stack that is
+    meant to be off (the ROS units under an Almond mode) or the camera unit,
+    which motion does not need and the desktop checks through its own camera
+    previews. A unit that is neither active nor idle (``activating``,
+    ``unresponsive``) is always listed under its own word, so it fails the check.
+    """
+    ros_on = holds_buses(units)
+    services = [
+        {"name": unit, "state": RUNNING if state == "active" else state}
+        for unit, state in units.items()
+        if state not in IDLE_STATES or (ros_on and unit in BUS_UNITS)
+    ]
+    if ros_on:
+        # BUS_UNITS is in start order, core first: the container only talks to
+        # the core, so a core that is not up is the cause and the container's
+        # state a symptom of it.
+        not_up = [units[unit] for unit in BUS_UNITS if units.get(unit) != "active"]
+        if not_up:
+            return not_up[0], services
+        if almond_state in ALMOND_HOLDS_BUSES:
+            return f"almond {almond_state} while ros holds the buses", services
+        return CONNECTED, services
+    hardware = CONNECTED if almond_state in ALMOND_LINK_UP else almond_state
+    return hardware, [{"name": "almond-axol", "state": hardware}, *services]
+
+
 #: Hosts whose certificate is not checked. The agent and the Axol server run on
 #: the same machine, so the connection never leaves it: there is no network for a
 #: man in the middle to sit in, and no authority that would issue a certificate
@@ -222,6 +273,7 @@ class AxolAdapter:
         units = self.ros.states()
         ros_on = holds_buses(units)
         motors = robot.get("motors")
+        hardware, services = _stack_words(robot.get("state", "unknown"), units)
         return {
             # `command` holds the operation id — Session.to_dict() in the Axol's
             # own manager spells it that way, and nothing spells it `op`.
@@ -231,12 +283,9 @@ class AxolAdapter:
             # reports a robot as teleoperating while its motors sit disconnected.
             "mode": ROS_MODE if ros_on else (self._fleet_mode(session.get("command")) if running else None),
             "modes": list(ALL_MODES),
-            "hardware": robot.get("state", "unknown"),
+            "hardware": hardware,
             "recording": running and session.get("command") == RECORD_OPERATION,
-            "services": [
-                {"name": "almond-axol", "state": robot.get("state", "unknown")},
-                *({"name": unit, "state": state} for unit, state in units.items()),
-            ],
+            "services": services,
             "disk": None,
             # The agent does not run on the Axol's own host, so its RAM is not ours to read.
             "memory": None,

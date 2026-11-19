@@ -20,6 +20,7 @@ from fm_robot_agent.axol import (
     ROS_MODE,
     AxolAdapter,
     _frame_to_joint_state,
+    _stack_words,
 )
 from fm_robot_agent.axol_ros import CAMERA_UNIT, CORE_UNIT, ROS_UNIT, SUDOERS_RULE
 from fm_robot_agent.config import MODE, MODE_ALIAS, MOTION, TUNING
@@ -154,6 +155,101 @@ def test_status_counts_motors_whatever_shape_almond_sends(adapter, server, detai
     assert reported["motor_states"] == detail
 
 
+ROS_UP = {CORE_UNIT: "active", ROS_UNIT: "active", CAMERA_UNIT: "active"}
+ROS_OFF = {CORE_UNIT: "inactive", ROS_UNIT: "inactive", CAMERA_UNIT: "inactive"}
+
+
+def _passes(hardware: str, services: list[dict]) -> bool:
+    """The desktop's stack check, as RobotReadiness.swift spells it."""
+    up = {"running", "connected"}
+    return hardware in up and bool(services) and all(service["state"] in up for service in services)
+
+
+def test_a_healthy_ros_stack_reads_as_up_with_almond_disconnected():
+    """fm-rob-02 in ros mode: Almond's link is disconnected by design, every unit active."""
+    hardware, services = _stack_words("disconnected", ROS_UP)
+
+    assert hardware == "connected"
+    assert services == [{"name": unit, "state": "running"} for unit in ROS_UP]
+    assert _passes(hardware, services)
+
+
+def test_a_failed_core_fails_the_ros_stack_and_names_it():
+    hardware, services = _stack_words("disconnected", {**ROS_UP, CORE_UNIT: "failed"})
+
+    assert hardware == "failed"
+    assert {"name": CORE_UNIT, "state": "failed"} in services
+    assert not _passes(hardware, services)
+
+
+def test_the_core_names_the_fault_when_both_bus_units_are_down():
+    """The container only talks to the core, so the core's word is the cause."""
+    hardware, services = _stack_words("disconnected", {**ROS_UP, CORE_UNIT: "activating", ROS_UNIT: "failed"})
+
+    assert hardware == "activating"
+    assert {"name": ROS_UNIT, "state": "failed"} in services
+    assert not _passes(hardware, services)
+
+
+def test_a_failed_container_fails_the_ros_stack_under_a_healthy_core():
+    hardware, services = _stack_words("disconnected", {**ROS_UP, ROS_UNIT: "failed"})
+
+    assert hardware == "failed"
+    assert not _passes(hardware, services)
+
+
+@pytest.mark.parametrize("camera", ["inactive", "failed"])
+def test_a_stopped_camera_does_not_fail_the_ros_stack(camera):
+    """Motion needs no camera, and the desktop checks cameras on their own."""
+    hardware, services = _stack_words("disconnected", {**ROS_UP, CAMERA_UNIT: camera})
+
+    assert hardware == "connected"
+    assert CAMERA_UNIT not in {service["name"] for service in services}
+    assert _passes(hardware, services)
+
+
+@pytest.mark.parametrize("almond", ["connected", "busy"])
+def test_almond_connected_with_the_ros_units_idle_reads_as_up(almond):
+    hardware, services = _stack_words(almond, ROS_OFF)
+
+    assert hardware == "connected"
+    assert services == [{"name": "almond-axol", "state": "connected"}]
+    assert _passes(hardware, services)
+
+
+@pytest.mark.parametrize("almond", ["disconnected", "connecting", "error"])
+def test_almond_not_connected_fails_the_stack(almond):
+    hardware, services = _stack_words(almond, ROS_OFF)
+
+    assert hardware == almond
+    assert not _passes(hardware, services)
+
+
+def test_an_unresponsive_unit_fails_the_stack_under_its_own_word():
+    """A unit nobody could read may be a running core, so it is ros mode and not up."""
+    hardware, services = _stack_words("disconnected", {**ROS_OFF, CORE_UNIT: "unresponsive"})
+
+    assert hardware == "unresponsive"
+    assert {"name": CORE_UNIT, "state": "unresponsive"} in services
+    assert {"name": ROS_UNIT, "state": "inactive"} in services
+    assert not _passes(hardware, services)
+
+
+def test_an_unresponsive_camera_under_almond_stays_visible_and_fails():
+    hardware, services = _stack_words("connected", {**ROS_OFF, CAMERA_UNIT: "unresponsive"})
+
+    assert {"name": CAMERA_UNIT, "state": "unresponsive"} in services
+    assert not _passes(hardware, services)
+
+
+def test_almond_on_the_buses_beside_ros_fails_the_stack():
+    """Two commanders on one bus must never read as a healthy robot."""
+    hardware, services = _stack_words("connected", ROS_UP)
+
+    assert hardware not in {"running", "connected"}
+    assert not _passes(hardware, services)
+
+
 def test_status_names_the_running_mode_in_fleet_terms(adapter, server):
     adapter.set_mode("teleop")
     assert server.running_op == "teleop"
@@ -270,7 +366,8 @@ def test_ros_mode_disconnects_almond_then_starts_core_then_container_then_camera
     reported = adapter.status()
     assert reported["mode"] == ROS_MODE
     assert ROS_MODE in reported["modes"]
-    assert {"name": CORE_UNIT, "state": "active"} in reported["services"]
+    assert {"name": CORE_UNIT, "state": "running"} in reported["services"]
+    assert _passes(reported["hardware"], reported["services"])
 
 
 @pytest.mark.parametrize("operation", ["teleop", "gravity-comp"])
@@ -286,7 +383,7 @@ def test_ros_mode_refuses_while_an_almond_operation_runs(adapter, server, units,
 
 
 def test_a_camera_failure_still_enters_ros_mode_and_says_so(adapter, units):
-    """Motion needs no camera; the reply and status still name the failure."""
+    """Motion needs no camera: the reply names the failure, and the stack still reads as up."""
     units.fail_start.add(CAMERA_UNIT)
 
     outcome = adapter.set_mode(ROS_MODE)
@@ -296,16 +393,17 @@ def test_a_camera_failure_still_enters_ros_mode_and_says_so(adapter, units):
     assert CAMERA_UNIT in outcome.detail["camera_failure"]
     reported = adapter.status()
     assert reported["mode"] == ROS_MODE
-    assert {"name": CAMERA_UNIT, "state": "inactive"} in reported["services"]
+    assert reported["hardware"] == "connected"
+    assert CAMERA_UNIT not in {service["name"] for service in reported["services"]}
 
 
-def test_a_camera_that_dies_on_start_is_reported_in_status(adapter, units):
+def test_a_camera_that_dies_on_start_is_named_in_the_reply_not_the_stack(adapter, units):
     units.die_on_start.add(CAMERA_UNIT)
 
     outcome = adapter.set_mode(ROS_MODE)
 
     assert outcome.ok is True and f"{CAMERA_UNIT} is failed after start" in outcome.message
-    assert {"name": CAMERA_UNIT, "state": "failed"} in adapter.status()["services"]
+    assert all(service["state"] == "running" for service in adapter.status()["services"])
 
 
 def test_a_failed_ros_start_never_starts_the_cameras(adapter, units):
