@@ -648,6 +648,52 @@ def test_an_empty_frame_still_encodes():
     assert _frame_to_joint_state({"t": 1.0, "m": {}})[:4] == b"\x00\x01\x00\x00"
 
 
+#: Motor-frame positions fm-rob-02's telemetry socket sent with both arms at rest
+#: under Almond's gravity compensation, grippers included (2026-11-20).
+REST_FRAME = {
+    "left:SHOULDER_1": 1.545, "left:SHOULDER_2": -0.368, "left:SHOULDER_3": 2.496,
+    "left:ELBOW": -2.58, "left:WRIST_1": 2.369, "left:WRIST_2": 1.543,
+    "left:WRIST_3": 1.502, "left:GRIPPER": 1.235,
+    "right:SHOULDER_1": -1.531, "right:SHOULDER_2": 0.36, "right:SHOULDER_3": 2.29,
+    "right:ELBOW": 2.583, "right:WRIST_1": 2.351, "right:WRIST_2": -1.56,
+    "right:WRIST_3": -1.455, "right:GRIPPER": 2.02,
+}
+
+
+def _capture_joint_state(monkeypatch) -> dict:
+    """The fields the next encoded JointState is built from."""
+    sent: dict = {}
+
+    def capture(**message) -> bytes:
+        sent.update(message)
+        return b""
+
+    monkeypatch.setattr("fm_robot_agent.axol.joint_state", capture)
+    return sent
+
+
+#: How far from zero a joint may read at rest: the arms hang slack under gravity
+#: compensation, and the frame above sits up to 0.14 rad (8 degrees) off. A missed
+#: offset is at least 20 degrees, so this still catches one.
+REST_TOLERANCE_RAD = 0.2
+
+
+def test_a_rest_pose_is_published_near_zero_in_the_joint_frame(monkeypatch):
+    """The ROS graph draws the rest pose at zero; Almond's telemetry must match it."""
+    sent = _capture_joint_state(monkeypatch)
+    frame = {name: [position, 0.0, 0.0] for name, position in REST_FRAME.items()}
+    _frame_to_joint_state({"t": 1.0, "m": frame})
+    assert len(sent["names"]) == 14
+    for name, position in zip(sent["names"], sent["positions"]):
+        assert abs(position) < REST_TOLERANCE_RAD, f"{name} at rest reads {position:.3f} rad"
+
+
+def test_a_gripper_is_left_out_without_its_calibrated_limits(monkeypatch):
+    sent = _capture_joint_state(monkeypatch)
+    _frame_to_joint_state({"t": 1.0, "m": {"left:GRIPPER": [1.2, 0.0, 0.0], "left:ELBOW": [0.0, 0.0, 0.0]}})
+    assert sent["names"] == ["left:ELBOW"]
+
+
 class SocketStub:
     """A telemetry socket that replays a fixed script of messages."""
 
