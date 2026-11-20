@@ -50,7 +50,13 @@ from fm_robot_agent import units
 from fm_robot_agent.arm_poses import POSE_NAME
 from fm_robot_agent.calibration import CalibrationStore
 from fm_robot_agent.description import DescriptionBundle
-from fm_robot_agent.protocol import SCHEMA_VERSION, AdapterError, Outcome, RobotAdapter
+from fm_robot_agent.protocol import (
+    SCHEMA_VERSION,
+    AdapterError,
+    GuardsUnitChanges,
+    Outcome,
+    RobotAdapter,
+)
 
 #: Every key this agent answers sits under here. The namespace segment keeps two
 #: robots on one router apart; a wildcard query over it is how the desktop
@@ -367,9 +373,9 @@ def _unit(key: str, adapter: RobotAdapter, body: dict) -> Reply:
     """List, read, or start, stop or restart one of this host's units.
 
     Host-level rather than an adapter's: every robot runs its stack as fm-*
-    units. An adapter that knows a unit must not start yet says so through an
-    optional ``unit_refusal(action, unit)``; the Axol does while Almond holds
-    the buses its core would open.
+    units. An adapter that implements :class:`GuardsUnitChanges` gets every
+    change to run under its own guard; the Axol refuses its core and container
+    while Almond holds the buses they would open.
     """
     action = body.get("action") or "list"
     if action not in units.UNIT_ACTIONS:
@@ -388,12 +394,13 @@ def _unit(key: str, adapter: RobotAdapter, body: dict) -> Reply:
     if action == "status":
         return _outcome(key, Outcome(ok=True, detail=units.describe([unit])[0]))
 
-    vendor_refusal = getattr(adapter, "unit_refusal", None)
-    refused = vendor_refusal(action, unit) if vendor_refusal is not None else None
-    if refused is not None:
-        return _outcome(key, refused)
-    ok, message = units.change(action, unit)
-    return _outcome(key, Outcome(ok=ok, message=message, detail=units.describe([unit])[0]))
+    def change() -> Outcome:
+        ok, message = units.change(action, unit)
+        return Outcome(ok=ok, message=message, detail=units.describe([unit])[0])
+
+    if isinstance(adapter, GuardsUnitChanges):
+        return _outcome(key, adapter.guarded_unit_change(action, unit, change))
+    return _outcome(key, change())
 
 
 def verb_of(key: str, namespace: str) -> str | None:

@@ -77,6 +77,7 @@ from fm_robot_agent.protocol import (
     PERCEPTION_DEBUG_TIMEOUT_S,
     PERCEPTION_DEBUG_TYPE,
     SET_BOOL_SUCCESS,
+    TIMEOUT_EXIT,
     AdapterError,
     Outcome,
     task_not_recorded,
@@ -229,8 +230,6 @@ COMPOSE_TIMEOUT_S = 30
 
 #: The stack check before a perception debug call is bounded by COMPOSE_TIMEOUT_S.
 
-#: What coreutils `timeout` exits with when it stopped the command.
-TIMEOUT_EXIT = 124
 
 #: The host's own memory accounting. The agent runs outside the containers, so
 #: this is the whole devbox — the number the kernel's OOM killer acts on.

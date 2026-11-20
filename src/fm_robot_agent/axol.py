@@ -46,6 +46,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from collections.abc import Callable
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -73,6 +74,7 @@ from fm_robot_agent.protocol import (
     PERCEPTION_DEBUG_TIMEOUT_S,
     PERCEPTION_DEBUG_TYPE,
     SET_BOOL_SUCCESS,
+    TIMEOUT_EXIT,
     AdapterError,
     Outcome,
     task_not_recorded,
@@ -103,9 +105,6 @@ ROS_MODE = "ros"
 #: root's, and the robot user's sudo rule reaches it with no password.
 ROS_EXEC = ("/usr/bin/sudo", "-n", "/usr/bin/docker", "exec", "fm-axol-ros-1", "bash", "-c")
 ROS_SETUP = "/ws/install/setup.bash"
-
-#: What coreutils `timeout` exits with when it stopped the command.
-TIMEOUT_EXIT = 124
 
 #: Every mode `status` reports, Almond's operations and `ros` together.
 ALL_MODES = tuple(sorted((*MODES, ROS_MODE)))
@@ -770,8 +769,9 @@ class AxolAdapter:
             return Outcome(ok=False, message=f"mode {ROS_MODE} takes no arguments")
         if self.ros.active():
             return Outcome(ok=True, message=f"mode {ROS_MODE}", detail={"mode": ROS_MODE})
-        if self._get("/api/op/status").get("running"):
-            return Outcome(ok=False, message=f"an Almond operation is running; stop it before mode {ROS_MODE}")
+        refusal = self._almond_refusal(f"mode {ROS_MODE}", link_too=False)
+        if refusal is not None:
+            return refusal
         self._post("/api/robot/disconnect", {})
         failure = self.ros.start()
         if failure is not None:
@@ -785,24 +785,35 @@ class AxolAdapter:
             )
         return Outcome(ok=True, message=f"mode {ROS_MODE}", detail={"mode": ROS_MODE})
 
-    def unit_refusal(self, action: str, unit: str) -> Outcome | None:
+    @_holding_bus_lock
+    def guarded_unit_change(self, action: str, unit: str, change: Callable[[], Outcome]) -> Outcome:
         """Refuse a ``unit`` start or restart of the core or container while Almond holds the buses.
 
-        The same check ``_enter_ros`` makes, without its handover: a caller
-        driving one unit has not asked for Almond to be disconnected, so the
-        reply points at ``mode ros``, which does both in order. A stop is
-        never refused; it only ever takes a commander off the buses.
+        The check and the change run under the bus lock, as ``mode ros`` does,
+        so no verb can hand the buses to Almond between the two. Unlike the
+        mode, a caller driving one unit has not asked for Almond to be
+        disconnected, so a link on the buses is refused and the reply points at
+        ``mode ros``, which does the handover in order. A stop is never refused;
+        it only ever takes a commander off the buses. Almond's own web UI is not
+        behind this lock, the gap ``_enter_ros`` documents.
         """
-        if unit not in BUS_UNITS or action not in ("start", "restart"):
-            return None
+        if unit in BUS_UNITS and action in ("start", "restart"):
+            refusal = self._almond_refusal(f"{action} {unit}", link_too=True)
+            if refusal is not None:
+                return refusal
+        return change()
+
+    def _almond_refusal(self, what: str, *, link_too: bool) -> Outcome | None:
+        """Refuse ``what`` while an Almond operation runs, and with ``link_too`` while its link holds the buses."""
         if self._get("/api/op/status").get("running"):
-            return Outcome(ok=False, message=f"an Almond operation is running; stop it before {action} {unit}")
-        almond_state = self._get("/api/robot/status").get("state")
-        if almond_state in ALMOND_HOLDS_BUSES:
-            return Outcome(
-                ok=False,
-                message=f"Almond is {almond_state} on the buses; use mode {ROS_MODE} to hand them over",
-            )
+            return Outcome(ok=False, message=f"an Almond operation is running; stop it before {what}")
+        if link_too:
+            almond_state = self._get("/api/robot/status").get("state")
+            if almond_state in ALMOND_HOLDS_BUSES:
+                return Outcome(
+                    ok=False,
+                    message=f"Almond is {almond_state} on the buses; use mode {ROS_MODE} to hand them over",
+                )
         return None
 
     def _ros_refusal(self, what: str) -> Outcome | None:

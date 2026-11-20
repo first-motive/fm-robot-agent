@@ -38,8 +38,9 @@ BUS_UNITS = (CORE_UNIT, ROS_UNIT)
 #: Every unit, in start order, as :meth:`RosStack.states` reports them.
 UNITS = (*BUS_UNITS, CAMERA_UNIT)
 
-#: Where the rule that grants these units lives, named in a refusal.
+#: Where the rule that grants these units lives, named in the journal beside a sudo refusal.
 SUDOERS_RULE = "/etc/sudoers.d/fm-axol"
+SUDO_HINT = f"check {SUDOERS_RULE} from fm-axol's install"
 
 #: The only states that hold no process on the CAN buses or the cameras.
 #: Everything else holds them: ``activating`` and ``deactivating`` are a core
@@ -58,7 +59,7 @@ class RosStack:
 
     def states(self) -> dict[str, str]:
         """Each unit's ``systemctl is-active`` answer, in start order."""
-        return {unit: self._state(unit) for unit in UNITS}
+        return {unit: active_state(unit) for unit in UNITS}
 
     def active(self) -> bool:
         """Whether any unit may be commanding the buses."""
@@ -101,20 +102,14 @@ class RosStack:
         before the unit existed still stops cleanly.
         """
         units = BUS_UNITS[::-1]
-        if self._state(CAMERA_UNIT) not in IDLE_STATES:
+        if active_state(CAMERA_UNIT) not in IDLE_STATES:
             units = (CAMERA_UNIT, *units)
-        failures = [failure for unit in units if (failure := self._systemctl("stop", unit))]
+        failures = [failure for unit in units if (failure := systemctl("stop", unit, SUDO_HINT))]
         return "; ".join(failures) or None
 
     def _start_one(self, unit: str) -> str | None:
         """Start one unit and watch it settle, returning ``None`` or why it is not up."""
-        failure = self._systemctl("start", unit)
+        failure = systemctl("start", unit, SUDO_HINT)
         if failure is None and (state := settled_state(unit)) != "active":
             failure = f"{unit} is {state} after start"
         return failure
-
-    def _state(self, unit: str) -> str:
-        return active_state(unit)
-
-    def _systemctl(self, action: str, unit: str) -> str | None:
-        return systemctl(action, unit, hint=f"check {SUDOERS_RULE} from fm-axol's install")

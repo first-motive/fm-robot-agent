@@ -19,6 +19,7 @@ arm: ``collect`` on the Anvil, only once armed locally, and the Axol's
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Protocol, runtime_checkable
 
@@ -47,6 +48,9 @@ PERCEPTION_DEBUG_TIMEOUT_S = 10
 #: The SetBool reply as `ros2 service call` prints it: a Python repr, parsed
 #: rather than answered by an rclpy client in a container the agent runs outside.
 SET_BOOL_SUCCESS = re.compile(r"success=(True|False)")
+
+#: What coreutils `timeout` exits with when it stopped the command.
+TIMEOUT_EXIT = 124
 
 
 class AdapterError(Exception):
@@ -226,3 +230,21 @@ class RobotAdapter(Protocol):
 
     def episodes(self, dataset: str) -> list[dict]:
         """Episodes recorded into ``dataset``, newest ordering left to the robot."""
+
+
+@runtime_checkable
+class GuardsUnitChanges(Protocol):
+    """Optional beside :class:`RobotAdapter`: a robot whose units another process contends for.
+
+    The ``unit`` verb is host-level and runs the same on every robot, so it is
+    not on :class:`RobotAdapter`. An adapter that knows a unit must not start
+    while something else holds what that unit opens implements this, and the
+    router hands every change through it.
+    """
+
+    def guarded_unit_change(self, action: str, unit: str, change: Callable[[], Outcome]) -> Outcome:
+        """Run ``change`` for ``action`` on ``unit``, or refuse without running it.
+
+        The check and ``change`` run under whatever lock the adapter holds for
+        the same resource, so no other verb can take it between the two.
+        """

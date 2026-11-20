@@ -373,17 +373,23 @@ of the platform's camera daemons, `zed_x_daemon` and `nvargus-daemon`, which
 take `status` and `restart` only. Anything else is refused before `systemctl`
 runs. `active`, `sub` and `enabled` are systemd's `ActiveState`, `SubState` and
 `UnitFileState`; a unit the host lacks reads `enabled: not-found`. Changes run
-as `sudo -n systemctl`, so the robot user needs passwordless sudo
-(`fm-setup`'s `robot-sudo`).
+as `sudo -n systemctl` and the agent's self-restart as `sudo -n systemd-run`,
+so the robot user needs passwordless sudo for both; `fm-setup`'s `robot-sudo`
+grants it for every command. A failed change replies with a short reason
+(`systemctl start fm-axol-zed.service failed`, `sudo refused ...`); what
+systemctl or sudo printed goes to the agent's journal.
 
 A start or restart is good only once the unit has stayed `active` for 3 s, so a
-unit that dies on a bad config replies `ok: false` with the state it fell to.
-The agent refuses to stop itself, since nothing on the fabric could start it
-again; a restart of `fm-robot-agent` replies first and runs one second later
-from a transient systemd timer. On the Axol, a start or restart of
-`fm-axol-core` or `fm-axol-ros` is refused while an Almond operation runs or
-Almond's link holds the buses: `mode ros` does that handover in order. The
-verb answers only a named robot, never a wildcard.
+unit that dies on a bad config replies `ok: false` with the state it fell to. A
+oneshot that ran to completion (`inactive` with `Result=success`) is a good
+start. The agent refuses to stop itself, since nothing on the fabric could
+start it again; a restart of `fm-robot-agent` replies first and runs one second
+later from a transient systemd timer, `fm-robot-agent-restart`, and a second
+request while that timer is pending schedules nothing. On the Axol, a start or
+restart of `fm-axol-core` or `fm-axol-ros` is refused while an Almond operation
+runs or Almond's link holds the buses, checked and done under the adapter's bus
+lock: `mode ros` does that handover in order. The verb answers only a named
+robot, never a wildcard.
 
 ```bash
 fm robot fm-rob-02 unit list

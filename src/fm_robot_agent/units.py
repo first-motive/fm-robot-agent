@@ -8,9 +8,10 @@ checked against :data:`FM_UNIT` or the two camera daemons, normalised to
     zed_x_daemon.service      list · status · restart
     nvargus-daemon.service    list · status · restart
 
-Reads need no privilege. Changes run as :data:`PRIVILEGED_SYSTEMCTL`, which the
-robot user's passwordless sudo rule allows; ``-n`` makes sudo refuse rather than
-wait for a password no one will type.
+Reads need no privilege. Changes run as :data:`PRIVILEGED_SYSTEMCTL`, and the
+agent's self-restart through ``systemd-run``, both under the robot user's
+passwordless sudo; ``-n`` makes sudo refuse rather than wait for a password no
+one will type.
 
 The agent's own unit is a special case in both directions. A stop is refused:
 nothing could start the agent again from the fabric. A restart is handed to a
@@ -21,18 +22,23 @@ A start is only a start once the unit has stayed up. ``systemctl start`` returns
 when the unit reaches ``active``, and a unit that dies seconds later has still
 returned 0, so :func:`settled_state` keeps reading ``is-active`` for
 :data:`SETTLE_S` before it calls a start good.
+
+Every subprocess goes through :func:`_run`, which raises :class:`NoAnswer` or
+:class:`AdapterError` when the command did not run to an exit and otherwise
+hands back the exit for the caller to judge. What systemctl or sudo printed
+goes to this host's journal; a reply on the fabric carries a short reason.
 """
 
 from __future__ import annotations
 
 import re
 import subprocess
+import sys
 import time
 
 from fm_robot_agent.protocol import AdapterError
 
 UNIT_ACTIONS = ("list", "status", "start", "stop", "restart")
-CHANGE_ACTIONS = ("start", "stop", "restart")
 
 #: The units this verb may name: every First Motive unit, and nothing else.
 FM_UNIT = re.compile(r"^fm-[a-z0-9-]+(\.service)?$")
@@ -50,9 +56,12 @@ PRIVILEGED_SYSTEMCTL = ("/usr/bin/sudo", "-n", "/usr/bin/systemctl")
 
 #: How the agent restarts itself: a transient timer, outside this unit's cgroup,
 #: fires after the reply has gone. A restart run in-process would kill the
-#: process before it answered.
-DEFERRED_RESTART = ("/usr/bin/sudo", "-n", "/usr/bin/systemd-run", "--on-active=1",
-                    "/usr/bin/systemctl", "restart", AGENT_UNIT)
+#: process before it answered. The fixed name lets a second request see the
+#: first is pending, and ``--collect`` unloads it even if the restart failed, so
+#: the name is free again afterwards.
+RESTART_UNIT = "fm-robot-agent-restart"
+DEFERRED_RESTART = ("/usr/bin/sudo", "-n", "/usr/bin/systemd-run", f"--unit={RESTART_UNIT}", "--collect",
+                    "--on-active=1", "/usr/bin/systemctl", "restart", AGENT_UNIT)
 
 #: How sudo words a refusal. With ``-n`` and no matching NOPASSWD line it says
 #: ``sudo: a password is required``; a user with no rule at all, or with an argv
@@ -83,6 +92,29 @@ SETTLE_POLL_S = 0.5
 SHOWN = {"ActiveState": "active", "SubState": "sub", "UnitFileState": "enabled"}
 
 
+class NoAnswer(AdapterError):
+    """A command ran out of time, as opposed to failing to run at all."""
+
+
+def _run(argv: list[str] | tuple[str, ...], timeout_s: float) -> subprocess.CompletedProcess:
+    """Run one command to its exit. Raises :class:`NoAnswer` on a timeout, :class:`AdapterError` if it cannot run."""
+    try:
+        return subprocess.run(list(argv), capture_output=True, text=True, timeout=timeout_s, check=False)
+    except subprocess.TimeoutExpired as exc:
+        raise NoAnswer(f"{' '.join(argv[:2])} did not answer in {timeout_s} s") from exc
+    except OSError as exc:
+        raise AdapterError(f"{' '.join(argv[:2])} could not run: {exc}") from exc
+
+
+def _journal(what: str, done: subprocess.CompletedProcess, hint: str = "") -> str:
+    """Log what a failed command printed, and return the short reason a reply carries."""
+    printed = (done.stderr or done.stdout).strip() or f"exit {done.returncode}"
+    print(f"fm-robot-agent: {what}: {printed}{'; ' + hint if hint else ''}", file=sys.stderr, flush=True)
+    # A refusal by sudo is told apart from a unit that started and failed, so a
+    # missing or narrower rule reads as one.
+    return f"sudo refused {what}" if printed.startswith(SUDO_REFUSALS) else f"{what} failed"
+
+
 def normalise(name: object) -> str | None:
     """The ``.service`` unit a caller's name means, or ``None`` when it is not one we serve."""
     if not isinstance(name, str):
@@ -105,16 +137,10 @@ def refusal(action: str, unit: str) -> str | None:
 def active_state(unit: str) -> str:
     """One unit's ``systemctl is-active`` answer."""
     try:
-        done = subprocess.run(
-            ["systemctl", "is-active", unit],
-            capture_output=True,
-            text=True,
-            timeout=STATE_TIMEOUT_S,
-            check=False,
-        )
-    except subprocess.TimeoutExpired:
+        done = _run(["systemctl", "is-active", unit], STATE_TIMEOUT_S)
+    except NoAnswer:
         return UNRESPONSIVE
-    except OSError:
+    except AdapterError:
         return ABSENT
     return done.stdout.strip() or UNRESPONSIVE
 
@@ -130,46 +156,36 @@ def settled_state(unit: str) -> str:
 
 
 def systemctl(action: str, unit: str, hint: str = "") -> str | None:
-    """Run one change under sudo, returning ``None`` or why it failed.
+    """Run one change under sudo, returning ``None`` or the short reason it failed.
 
-    ``hint`` says where the sudo rule comes from, for a refusal by sudo itself.
+    ``hint`` says where the sudo rule comes from; it goes to the journal with
+    what sudo printed.
     """
     try:
-        done = subprocess.run(
-            [*PRIVILEGED_SYSTEMCTL, action, unit],
-            capture_output=True,
-            text=True,
-            timeout=SYSTEMCTL_TIMEOUT_S,
-            check=False,
-        )
-    except subprocess.TimeoutExpired:
+        done = _run([*PRIVILEGED_SYSTEMCTL, action, unit], SYSTEMCTL_TIMEOUT_S)
+    except NoAnswer:
         return f"systemctl {action} {unit} took longer than {SYSTEMCTL_TIMEOUT_S} s"
-    except OSError as exc:
-        return f"systemctl {action} {unit} could not run: {exc}"
+    except AdapterError as exc:
+        print(f"fm-robot-agent: {exc}", file=sys.stderr, flush=True)
+        return f"systemctl {action} {unit} could not run"
     if done.returncode != 0:
-        reason = (done.stderr or done.stdout).strip() or f"exit {done.returncode}"
-        # A refusal by sudo is told apart from a unit that started and failed,
-        # so a missing or narrower rule reads as one.
-        if reason.startswith(SUDO_REFUSALS):
-            return f"sudo refused systemctl {action} {unit}{'; ' + hint if hint else ''} ({reason})"
-        return f"systemctl {action} {unit} failed: {reason}"
+        return _journal(f"systemctl {action} {unit}", done, hint)
     return None
 
 
 def change(action: str, unit: str) -> tuple[bool, str]:
     """Start, stop or restart one unit, and whether it ended where it was asked to."""
     if unit == AGENT_UNIT and action == "restart":
-        failure = _run(DEFERRED_RESTART, timeout=STATE_TIMEOUT_S)
-        if failure is not None:
-            return False, f"could not schedule the restart: {failure}"
-        return True, f"{AGENT_UNIT} restarts in 1 s; this reply is its last"
+        return _restart_agent()
     failure = systemctl(action, unit)
     if failure is not None:
         return False, failure
     if action == "stop":
         return True, f"{unit} stopped"
     state = settled_state(unit)
-    if state != "active":
+    # A oneshot unit without RemainAfterExit runs to completion and goes back to
+    # inactive; that is a clean run, not a death.
+    if state != "active" and not (state == "inactive" and _show(unit, "Result") == "success"):
         return False, f"{unit} is {state} after {action}"
     return True, f"{unit} {'started' if action == 'start' else 'restarted'}"
 
@@ -185,7 +201,7 @@ def describe(units: list[str]) -> list[dict]:
     output = _read(["systemctl", "show", "--property=LoadState,ActiveState,SubState,UnitFileState", *units])
     blocks = [block for block in output.split("\n\n") if block.strip()]
     described = []
-    for unit, block in zip(units, blocks, strict=False):
+    for unit, block in zip(units, blocks, strict=True):
         fields = dict(line.partition("=")[::2] for line in block.splitlines() if "=" in line)
         entry = {"name": unit, **{wire: fields.get(prop, "") for prop, wire in SHOWN.items()}}
         if fields.get("LoadState") == "not-found":
@@ -205,24 +221,25 @@ def listed() -> list[dict]:
             if entry["name"] in fm_units or entry["enabled"] != "not-found"]
 
 
+def _restart_agent() -> tuple[bool, str]:
+    if active_state(f"{RESTART_UNIT}.timer") == "active":
+        return True, f"{AGENT_UNIT} already restarts within 1 s"
+    try:
+        done = _run(DEFERRED_RESTART, STATE_TIMEOUT_S)
+    except AdapterError as exc:
+        return False, f"could not schedule the restart: {exc}"
+    if done.returncode != 0:
+        return False, _journal("systemd-run of the agent's restart", done)
+    return True, f"{AGENT_UNIT} restarts in 1 s; this reply is its last"
+
+
+def _show(unit: str, prop: str) -> str:
+    return _read(["systemctl", "show", f"--property={prop}", "--value", unit]).strip()
+
+
 def _read(argv: list[str]) -> str:
     """A read-only systemctl command's output, or an :class:`AdapterError` saying why not."""
-    try:
-        done = subprocess.run(argv, capture_output=True, text=True, timeout=STATE_TIMEOUT_S, check=False)
-    except subprocess.TimeoutExpired as exc:
-        raise AdapterError(f"{' '.join(argv[:2])} did not answer in {STATE_TIMEOUT_S} s") from exc
-    except OSError as exc:
-        raise AdapterError(f"{' '.join(argv[:2])} could not run: {exc}") from exc
+    done = _run(argv, STATE_TIMEOUT_S)
     if done.returncode != 0:
-        raise AdapterError(f"{' '.join(argv[:2])} failed: {(done.stderr or done.stdout).strip()}")
+        raise AdapterError(_journal(" ".join(argv[:2]), done))
     return done.stdout
-
-
-def _run(argv: tuple[str, ...], timeout: float) -> str | None:
-    try:
-        done = subprocess.run(list(argv), capture_output=True, text=True, timeout=timeout, check=False)
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        return str(exc)
-    if done.returncode != 0:
-        return (done.stderr or done.stdout).strip() or f"exit {done.returncode}"
-    return None

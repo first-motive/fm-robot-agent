@@ -24,7 +24,7 @@ from fm_robot_agent.axol import (
 )
 from fm_robot_agent.axol_ros import CAMERA_UNIT, CORE_UNIT, ROS_UNIT, SUDOERS_RULE
 from fm_robot_agent.config import MODE, MODE_ALIAS, MOTION, TUNING
-from fm_robot_agent.protocol import AdapterError
+from fm_robot_agent.protocol import AdapterError, Outcome
 
 
 class ServerStub:
@@ -429,13 +429,14 @@ def test_a_failed_ros_start_rolls_both_units_back(adapter, units):
     assert adapter.status()["mode"] is None
 
 
-def test_a_sudo_refusal_fails_ros_mode_with_a_clear_reason(adapter, units):
+def test_a_sudo_refusal_fails_ros_mode_with_a_clear_reason(adapter, units, capsys):
     units.sudo_refusal = "sudo: a password is required\n"
 
     outcome = adapter.set_mode(ROS_MODE)
 
     assert outcome.ok is False
-    assert "sudo refused" in outcome.message and SUDOERS_RULE in outcome.message
+    assert "sudo refused" in outcome.message
+    assert SUDOERS_RULE in capsys.readouterr().err
     assert adapter.status()["mode"] is None
 
 
@@ -1060,30 +1061,59 @@ def test_there_is_no_collection_loop(adapter, server):
     assert server.running_op is None
 
 
+def _changed():
+    return Outcome(ok=True, message="changed")
+
+
 @pytest.mark.parametrize("action", ["start", "restart"])
 @pytest.mark.parametrize("unit", [CORE_UNIT, ROS_UNIT])
 def test_a_bus_unit_start_is_refused_while_almond_holds_the_buses(adapter, server, action, unit):
     server.state = "connected"
-    refused = adapter.unit_refusal(action, unit)
-    assert refused is not None and not refused.ok and "mode ros" in refused.message
+    ran = []
+    outcome = adapter.guarded_unit_change(action, unit, lambda: ran.append(1) or _changed())
+    assert not outcome.ok and "mode ros" in outcome.message
+    assert ran == []
 
 
 def test_a_bus_unit_start_is_refused_while_an_almond_operation_runs(adapter, server):
     server.state = "disconnected"
     server.running_op = "teleop"
-    refused = adapter.unit_refusal("start", CORE_UNIT)
-    assert refused is not None and "operation is running" in refused.message
+    outcome = adapter.guarded_unit_change("start", CORE_UNIT, _changed)
+    assert not outcome.ok and "operation is running" in outcome.message
 
 
 def test_a_bus_unit_starts_once_almond_lets_go(adapter, server):
     server.state = "disconnected"
-    assert adapter.unit_refusal("restart", ROS_UNIT) is None
+    assert adapter.guarded_unit_change("restart", ROS_UNIT, _changed).message == "changed"
 
 
 def test_stops_and_other_units_are_never_refused_for_almond(adapter, server):
     server.state = "busy"
-    assert adapter.unit_refusal("stop", CORE_UNIT) is None
-    assert adapter.unit_refusal("restart", CAMERA_UNIT) is None
+    assert adapter.guarded_unit_change("stop", CORE_UNIT, _changed).ok
+    assert adapter.guarded_unit_change("restart", CAMERA_UNIT, _changed).ok
+
+
+def test_a_unit_change_holds_the_bus_lock_through_the_change(adapter, server):
+    """A check released before its change would let mode ros or a recording slip in between."""
+    server.state = "disconnected"
+    entered = threading.Event()
+    release = threading.Event()
+
+    def slow_change():
+        entered.set()
+        release.wait(5)
+        return _changed()
+
+    worker = threading.Thread(target=adapter.guarded_unit_change, args=("start", CORE_UNIT, slow_change))
+    worker.start()
+    assert entered.wait(5)
+    try:
+        assert adapter._bus_lock.acquire(blocking=False) is False
+    finally:
+        release.set()
+        worker.join(5)
+    assert adapter._bus_lock.acquire(blocking=False) is True
+    adapter._bus_lock.release()
 
 
 SET_BOOL_OK = "response:\nstd_srvs.srv.SetBool_Response(success=True, message='debug on')\n"

@@ -27,10 +27,22 @@ class HostStub(SystemctlStub):
         #: Installed units and their UnitFileState. A unit absent here is not-found.
         self.installed: dict[str, str] = {}
         self.argv: list[list[str]] = []
+        #: is-active answers a unit gives in turn once started, the last one repeating.
+        self.after_start: dict[str, list[str]] = {}
+        #: Units that run to completion and exit 0, as a oneshot without RemainAfterExit does.
+        self.oneshot: set[str] = set()
 
     def run(self, argv, **kwargs) -> subprocess.CompletedProcess:
         argv = list(argv)
         self.argv.append(argv)
+        if argv[:2] == ["systemctl", "is-active"] and len(self.after_start.get(argv[2], [])) > 1:
+            self.calls.append(("is-active", argv[2]))
+            return subprocess.CompletedProcess(argv, 0, f"{self.after_start[argv[2]].pop(0)}\n", "")
+        if argv[:2] == ["systemctl", "is-active"] and argv[2] in self.after_start:
+            self.states[argv[2]] = self.after_start.pop(argv[2])[0]
+        if argv[:3] == ["systemctl", "show", "--property=Result"]:
+            result = "success" if argv[-1] in self.oneshot else "exit-code"
+            return subprocess.CompletedProcess(argv, 0, f"{result}\n", "")
         if argv[:2] == ["systemctl", "show"]:
             return subprocess.CompletedProcess(argv, 0, "\n".join(self._show(u) for u in argv[3:]), "")
         if argv[:2] in (["systemctl", "list-units"], ["systemctl", "list-unit-files"]):
@@ -45,7 +57,10 @@ class HostStub(SystemctlStub):
             self.calls.append(("restart", argv[4]))
             self.states[argv[4]] = "failed" if argv[4] in self.die_on_start else "active"
             return subprocess.CompletedProcess(argv, 0, "", "")
-        return super().run(argv, **kwargs)
+        done = super().run(argv, **kwargs)
+        if argv[3:4] == ["start"] and argv[4] in self.oneshot:
+            self.states[argv[4]] = "inactive"
+        return done
 
     def _show(self, unit: str) -> str:
         state = self.states.get(unit, "inactive")
@@ -171,9 +186,25 @@ def test_a_unit_that_dies_after_start_is_not_started(host):
     assert reply["message"] == "fm-axol-zed.service is failed after start"
 
 
-def test_a_failed_start_carries_systemctls_reason(host):
+def test_a_failed_start_replies_short_and_journals_systemctls_words(host, capsys):
     host.fail_start.add("fm-axol-zed.service")
-    assert "failed: Job for" in ask({"action": "start", "unit": "fm-axol-zed"})[1]["message"]
+    reply = ask({"action": "start", "unit": "fm-axol-zed"})[1]
+    assert reply["message"] == "systemctl start fm-axol-zed.service failed"
+    assert "Job for fm-axol-zed.service failed." in capsys.readouterr().err
+
+
+def test_a_sudo_refusal_replies_short_and_journals_sudos_words(host, capsys):
+    host.sudo_refusal = "sudo: a password is required\n"
+    reply = ask({"action": "start", "unit": "fm-axol-zed"})[1]
+    assert reply["ok"] is False and reply["message"] == "sudo refused systemctl start fm-axol-zed.service"
+    assert "a password is required" in capsys.readouterr().err
+
+
+def test_a_oneshot_that_ran_clean_is_a_good_start(host):
+    """Inactive with Result=success is a oneshot that finished, not a unit that died."""
+    host.oneshot.add("fm-axol-zed.service")
+    reply = ask({"action": "start", "unit": "fm-axol-zed"})[1]
+    assert reply["ok"] is True and reply["active"] == "inactive"
 
 
 def test_a_camera_daemon_restarts_and_nothing_more(host):
@@ -193,9 +224,16 @@ def test_the_agent_restarts_itself_after_its_reply(host):
     """systemctl restart run in-process would kill the agent before it answered."""
     ok, reply = ask({"action": "restart", "unit": "fm-robot-agent.service"})
     assert ok and reply["ok"] is True and "restarts in 1 s" in reply["message"]
-    assert [*SUDO, "/usr/bin/systemd-run", "--on-active=1", "/usr/bin/systemctl", "restart",
-            "fm-robot-agent.service"] in host.argv
+    assert [*SUDO, "/usr/bin/systemd-run", "--unit=fm-robot-agent-restart", "--collect", "--on-active=1",
+            "/usr/bin/systemctl", "restart", "fm-robot-agent.service"] in host.argv
     assert ("restart", "fm-robot-agent.service") not in host.calls
+
+
+def test_a_second_self_restart_while_one_is_pending_schedules_nothing(host):
+    host.states["fm-robot-agent-restart.timer"] = "active"
+    reply = ask({"action": "restart", "unit": "fm-robot-agent"})[1]
+    assert reply["ok"] is True and "already restarts" in reply["message"]
+    assert not any(argv[2:3] == ["/usr/bin/systemd-run"] for argv in host.argv)
 
 
 @pytest.mark.parametrize("body", [{"action": "start"}, {"action": "reboot", "unit": "fm-a"},
@@ -208,33 +246,48 @@ def test_a_malformed_change_is_refused_before_systemctl(host, body):
 
 def test_an_adapter_refusal_stops_the_change(host):
     class Guarded(FakeAdapter):
-        def unit_refusal(self, action, unit):
+        def guarded_unit_change(self, action, unit, change):
             return Outcome(ok=False, message=f"no {action} of {unit}")
 
     ok, reply = ask({"action": "start", "unit": "fm-axol-zed"}, Guarded())
-    assert ok and reply == {**reply, "ok": False, "message": "no start of fm-axol-zed.service"}
+    assert ok
+    assert reply["ok"] is False
+    assert reply["message"] == "no start of fm-axol-zed.service"
     assert host.changes() == []
+
+
+def test_an_adapter_guard_runs_the_change_it_is_handed(host):
+    class Guarded(FakeAdapter):
+        def guarded_unit_change(self, action, unit, change):
+            return change()
+
+    assert ask({"action": "start", "unit": "fm-axol-zed"}, Guarded())[1]["ok"] is True
+    assert host.changes() == [("start", "fm-axol-zed.service")]
 
 
 # --- the settle window -------------------------------------------------------
 
 
-def test_a_start_watches_the_unit_through_the_settle_window(monkeypatch):
-    """The BACKLOG bug: a unit that dies a moment after start reported ok."""
-    reads = iter(["active", "active", "failed"])
-    monkeypatch.setattr(units, "active_state", lambda unit: next(reads))
-    monkeypatch.setattr(units, "SETTLE_S", 10)
-    monkeypatch.setattr(units.time, "sleep", lambda _s: None)
-    assert units.settled_state(CORE_UNIT) == "failed"
+@pytest.fixture
+def short_window(monkeypatch):
+    """A real settle window, short enough for the suite: a few reads, real sleeps."""
+    monkeypatch.setattr(units, "SETTLE_S", 0.05)
+    monkeypatch.setattr(units, "SETTLE_POLL_S", 0.01)
 
 
-def test_a_unit_that_stays_up_settles_active(monkeypatch):
-    clock = iter([0.0, 0.0, 1.0, 2.0, 3.0])
-    monkeypatch.setattr(units.time, "monotonic", lambda: next(clock))
-    monkeypatch.setattr(units.time, "sleep", lambda _s: None)
-    monkeypatch.setattr(units, "active_state", lambda unit: "active")
-    monkeypatch.setattr(units, "SETTLE_S", 3.0)
-    assert units.settled_state(CORE_UNIT) == "active"
+def test_a_unit_that_dies_inside_the_window_is_not_started(host, short_window):
+    """The BACKLOG bug: a unit that died a moment after start reported ok."""
+    host.after_start["fm-axol-zed.service"] = ["active", "active", "failed"]
+    reply = ask({"action": "start", "unit": "fm-axol-zed"})[1]
+    assert reply["ok"] is False and reply["message"] == "fm-axol-zed.service is failed after start"
+    assert host.calls.count(("is-active", "fm-axol-zed.service")) == 3
+
+
+def test_a_unit_that_stays_up_for_the_window_is_started(host, short_window):
+    host.after_start["fm-axol-zed.service"] = ["active"]
+    reply = ask({"action": "start", "unit": "fm-axol-zed"})[1]
+    assert reply["ok"] is True and reply["message"] == "fm-axol-zed.service started"
+    assert host.calls.count(("is-active", "fm-axol-zed.service")) >= 3
 
 
 def test_the_ros_stack_start_uses_the_settle_window(systemctl, monkeypatch):

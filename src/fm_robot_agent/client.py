@@ -67,8 +67,8 @@ COLLECT_TIMEOUT_S = 220.0
 POSE_TIMEOUT_S = 100.0
 
 #: A unit start answers once the unit is up and has settled: systemctl's own
-#: 90 s bound plus the agent's 3 s settle window.
-UNIT_TIMEOUT_S = 100.0
+#: 90 s bound, the 3 s settle window, and the state reads either side of them.
+UNIT_TIMEOUT_S = 120.0
 
 #: `mode` is not a verb on the wire any more — it is a config write of the one
 #: key each robot spells its own way, kept here because it reads better than
