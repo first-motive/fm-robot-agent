@@ -35,6 +35,7 @@ from __future__ import annotations
 import functools
 import ipaddress
 import json
+import math
 import os
 import re
 import ssl
@@ -133,6 +134,37 @@ OWNER_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 #: no upsampling ever fills — the agent forwards frames as they arrive and drops
 #: any that would exceed it, rather than inventing samples between them.
 TELEMETRY_MAX_HZ = 20.0
+
+#: Degrees added to a telemetry position to turn Almond's motor frame into its
+#: joint frame, per ``arm:MOTOR`` key.
+#:
+#: The telemetry socket sends each motor's own encoder angle, whose zero is the
+#: end stop it was calibrated against. ``joint_states`` carries the joint frame,
+#: whose zero is the rest pose, as the ROS graph publishes it in ``ros`` mode.
+#: Almond's ``AxolArm.positions`` adds the same offsets, each joint's limit
+#: nearest zero (``closer_end_stop`` in ``almond_axol/robot/axol.py``); the agent
+#: imports no Almond SDK, so they are restated here and pinned by a test against
+#: a frame read off fm-rob-02 at rest.
+#:
+#: The grippers are absent: Almond normalises them against limits it finds at
+#: runtime, which the socket does not carry, so a raw gripper angle has no
+#: joint-frame value to publish.
+JOINT_FRAME_OFFSETS_DEG = {
+    "left:SHOULDER_1": -90.0,
+    "left:SHOULDER_2": 20.0,
+    "left:SHOULDER_3": -135.0,
+    "left:ELBOW": 150.0,
+    "left:WRIST_1": -135.0,
+    "left:WRIST_2": -90.0,
+    "left:WRIST_3": -90.0,
+    "right:SHOULDER_1": 90.0,
+    "right:SHOULDER_2": -20.0,
+    "right:SHOULDER_3": -135.0,
+    "right:ELBOW": -150.0,
+    "right:WRIST_1": -135.0,
+    "right:WRIST_2": 90.0,
+    "right:WRIST_3": 90.0,
+}
 
 #: How often telemetry rereads whether ``ros`` mode is on. A read is a few
 #: ``systemctl is-active`` calls, too many to spend on every frame, and a mode
@@ -792,12 +824,14 @@ def lerobot_v3_episodes(root: Path) -> list[dict]:
 def _frame_to_joint_state(frame: dict) -> bytes:
     """One Axol telemetry frame as CDR ``sensor_msgs/JointState``.
 
-    The frame holds ``{"left:SHOULDER_1": [position, velocity, torque]}``. Motor
+    The frame holds ``{"left:SHOULDER_1": [position, velocity, torque]}``, each
+    position in the motor's frame; it is published in the joint frame (see
+    ``JOINT_FRAME_OFFSETS_DEG``), and a motor with no offset is left out. Motor
     keys are sorted so a subscriber sees a stable joint order across frames — the
     dict's own order is whatever the sampler produced.
     """
     motors = frame.get("m") or {}
-    names = sorted(motors)
+    names = sorted(name for name in motors if name in JOINT_FRAME_OFFSETS_DEG)
     published: list[str] = []
     positions, velocities, efforts = [], [], []
     for name in names:
@@ -812,7 +846,7 @@ def _frame_to_joint_state(frame: dict) -> bytes:
             continue
         values += [0.0] * (3 - len(values))
         published.append(name)
-        positions.append(values[0])
+        positions.append(values[0] + math.radians(JOINT_FRAME_OFFSETS_DEG[name]))
         velocities.append(values[1])
         efforts.append(values[2])
     return joint_state(
