@@ -716,6 +716,26 @@ class AxolAdapter:
             )
         return Outcome(ok=True, message=f"mode {ROS_MODE}", detail={"mode": ROS_MODE})
 
+    def unit_refusal(self, action: str, unit: str) -> Outcome | None:
+        """Refuse a ``unit`` start or restart of the core or container while Almond holds the buses.
+
+        The same check ``_enter_ros`` makes, without its handover: a caller
+        driving one unit has not asked for Almond to be disconnected, so the
+        reply points at ``mode ros``, which does both in order. A stop is
+        never refused; it only ever takes a commander off the buses.
+        """
+        if unit not in BUS_UNITS or action not in ("start", "restart"):
+            return None
+        if self._get("/api/op/status").get("running"):
+            return Outcome(ok=False, message=f"an Almond operation is running; stop it before {action} {unit}")
+        almond_state = self._get("/api/robot/status").get("state")
+        if almond_state in ALMOND_HOLDS_BUSES:
+            return Outcome(
+                ok=False,
+                message=f"Almond is {almond_state} on the buses; use mode {ROS_MODE} to hand them over",
+            )
+        return None
+
     def _ros_refusal(self, what: str) -> Outcome | None:
         """Refuse an Almond operation while ``ros`` mode holds the buses."""
         if self.ros.active():

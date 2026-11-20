@@ -6,6 +6,8 @@ import subprocess
 
 import pytest
 
+from fm_robot_agent import units
+
 
 class SystemctlStub:
     """``systemctl`` for the fm-axol units, holding each unit's state in memory.
@@ -64,3 +66,9 @@ def systemctl(monkeypatch) -> SystemctlStub:
     stub = SystemctlStub()
     monkeypatch.setattr(subprocess, "run", stub.run)
     return stub
+
+
+@pytest.fixture(autouse=True)
+def no_settle_window(monkeypatch):
+    """A start reads its unit once. Tests that need the window set it themselves."""
+    monkeypatch.setattr(units, "SETTLE_S", 0)

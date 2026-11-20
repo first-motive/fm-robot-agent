@@ -66,6 +66,10 @@ COLLECT_TIMEOUT_S = 220.0
 #: A pose move answers once both arms are there. The adapter gives it 90 s.
 POSE_TIMEOUT_S = 100.0
 
+#: A unit start answers once the unit is up and has settled: systemctl's own
+#: 90 s bound plus the agent's 3 s settle window.
+UNIT_TIMEOUT_S = 100.0
+
 #: `mode` is not a verb on the wire any more — it is a config write of the one
 #: key each robot spells its own way, kept here because it reads better than
 #: naming that key and predates the config verb.
@@ -144,6 +148,11 @@ def build_payload(verb: str, args: argparse.Namespace) -> dict | None:
         body = {"action": args.value or "list"}
         if args.assignment:
             body["name"] = args.assignment
+        return body
+    if verb == "unit":
+        body = {"action": args.value or "list"}
+        if args.assignment:
+            body["unit"] = args.assignment
         return body
     if verb == "perception_debug":
         return {"enabled": PERCEPTION_DEBUG_VALUES[args.value]}
@@ -270,9 +279,10 @@ def main(argv: list[str] | None = None) -> int:
         nargs="?",
         help=f"mode: the config; record: start | stop; config: {' | '.join(CONFIG_ACTIONS)}; "
         f"session: {' | '.join(SESSION_ACTIONS)}; collect: {' | '.join(COLLECT_ACTIONS)}; "
-        "pose: list | plan NAME | go NAME | home; perception_debug: on | off",
+        "pose: list | plan NAME | go NAME | home; perception_debug: on | off; "
+        "unit: list | status UNIT | start UNIT | stop UNIT | restart UNIT",
     )
-    parser.add_argument("assignment", nargs="?", help="config set: KEY=VALUE; pose plan or go: the pose name")
+    parser.add_argument("assignment", nargs="?", help="config set: KEY=VALUE; pose plan or go: the pose name; unit: the unit name")
     parser.add_argument(
         "--arg",
         action="append",
@@ -353,7 +363,8 @@ def main(argv: list[str] | None = None) -> int:
             key,
             build_payload(args.verb, args),
             parameters,
-            timeout_s={"config": CONFIG_TIMEOUT_S, "collect": COLLECT_TIMEOUT_S, "pose": POSE_TIMEOUT_S}.get(
+            timeout_s={"config": CONFIG_TIMEOUT_S, "collect": COLLECT_TIMEOUT_S, "pose": POSE_TIMEOUT_S,
+                       "unit": UNIT_TIMEOUT_S}.get(
                 verb, QUERY_TIMEOUT_S),
             text_reply=verb == "description",
         )

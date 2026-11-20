@@ -1060,6 +1060,32 @@ def test_there_is_no_collection_loop(adapter, server):
     assert server.running_op is None
 
 
+@pytest.mark.parametrize("action", ["start", "restart"])
+@pytest.mark.parametrize("unit", [CORE_UNIT, ROS_UNIT])
+def test_a_bus_unit_start_is_refused_while_almond_holds_the_buses(adapter, server, action, unit):
+    server.state = "connected"
+    refused = adapter.unit_refusal(action, unit)
+    assert refused is not None and not refused.ok and "mode ros" in refused.message
+
+
+def test_a_bus_unit_start_is_refused_while_an_almond_operation_runs(adapter, server):
+    server.state = "disconnected"
+    server.running_op = "teleop"
+    refused = adapter.unit_refusal("start", CORE_UNIT)
+    assert refused is not None and "operation is running" in refused.message
+
+
+def test_a_bus_unit_starts_once_almond_lets_go(adapter, server):
+    server.state = "disconnected"
+    assert adapter.unit_refusal("restart", ROS_UNIT) is None
+
+
+def test_stops_and_other_units_are_never_refused_for_almond(adapter, server):
+    server.state = "busy"
+    assert adapter.unit_refusal("stop", CORE_UNIT) is None
+    assert adapter.unit_refusal("restart", CAMERA_UNIT) is None
+
+
 def test_there_is_no_perception_node(adapter, server):
     outcome = adapter.perception_debug(True)
     assert not outcome.ok and "no perception node" in outcome.message

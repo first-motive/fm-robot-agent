@@ -28,6 +28,10 @@ episode queryable uses, for the same reason: the suite runs with no router.
                               write   {"enabled": true|false}
                                       perception's debug frames: true turns them on and
                                       renews their lease, false turns them off
+    fm/robot/<ns>/unit        write   {"action": "list"|"status"|"start"|"stop"|"restart",
+                                       "unit": "fm-..."}
+                                      this host's fm-* systemd units and its camera
+                                      daemons (see units.py)
 
 Read and write verbs are both queries. Zenoh's put/subscribe pair delivers no
 reply, and every verb here has an answer the caller must see — a refused mode, a
@@ -42,6 +46,7 @@ import re
 from dataclasses import dataclass
 from urllib.parse import parse_qs
 
+from fm_robot_agent import units
 from fm_robot_agent.arm_poses import POSE_NAME
 from fm_robot_agent.calibration import CalibrationStore
 from fm_robot_agent.description import DescriptionBundle
@@ -57,7 +62,7 @@ READ_VERBS = ("status", "episodes")
 #: robot's URDF or meshes in one query, which no discovery needs.
 NAMED_READS = ("description", "asset")
 WRITE_VERBS = ("up", "down", "config", "mode", "record", "stop", "session", "collect", "calibration", "pose",
-               "perception_debug")
+               "perception_debug", "unit")
 
 #: What `calibration` can be asked to do. `get` sits with the writes for the
 #: reason config's does: a discovery wildcard has no business reading it.
@@ -358,6 +363,39 @@ def _perception_debug(key: str, adapter: RobotAdapter, body: dict) -> Reply:
     return _outcome(key, adapter.perception_debug(enabled))
 
 
+def _unit(key: str, adapter: RobotAdapter, body: dict) -> Reply:
+    """List, read, or start, stop or restart one of this host's units.
+
+    Host-level rather than an adapter's: every robot runs its stack as fm-*
+    units. An adapter that knows a unit must not start yet says so through an
+    optional ``unit_refusal(action, unit)``; the Axol does while Almond holds
+    the buses its core would open.
+    """
+    action = body.get("action") or "list"
+    if action not in units.UNIT_ACTIONS:
+        return _refuse(key, f"action must be one of {units.UNIT_ACTIONS}")
+    if action == "list":
+        if "unit" in body:
+            return _refuse(key, "list takes no unit")
+        return _envelope(key, {"ok": True, "units": units.listed()})
+
+    unit = units.normalise(body.get("unit"))
+    if unit is None:
+        return _refuse(key, f"{action} needs a unit: an fm-* service or one of {', '.join(units.CAMERA_DAEMONS)}")
+    refusal = units.refusal(action, unit)
+    if refusal is not None:
+        return _refuse(key, refusal)
+    if action == "status":
+        return _outcome(key, Outcome(ok=True, detail=units.describe([unit])[0]))
+
+    vendor_refusal = getattr(adapter, "unit_refusal", None)
+    refused = vendor_refusal(action, unit) if vendor_refusal is not None else None
+    if refused is not None:
+        return _outcome(key, refused)
+    ok, message = units.change(action, unit)
+    return _outcome(key, Outcome(ok=ok, message=message, detail=units.describe([unit])[0]))
+
+
 def verb_of(key: str, namespace: str) -> str | None:
     """The verb a key names, or ``None`` when the key is not ours.
 
@@ -448,6 +486,9 @@ def answer(
 
         if verb == "perception_debug":
             return _perception_debug(key, adapter, body)
+
+        if verb == "unit":
+            return _unit(key, adapter, body)
 
         if verb == "session":
             action = body.get("action") or "get"
