@@ -1086,9 +1086,63 @@ def test_stops_and_other_units_are_never_refused_for_almond(adapter, server):
     assert adapter.unit_refusal("restart", CAMERA_UNIT) is None
 
 
-def test_there_is_no_perception_node(adapter, server):
+SET_BOOL_OK = "response:\nstd_srvs.srv.SetBool_Response(success=True, message='debug on')\n"
+
+
+def serve_set_bool(monkeypatch, units, reply=SET_BOOL_OK, returncode=0):
+    """The fm-axol container answering one SetBool call; units still go to the stub."""
+    calls = []
+
+    def run(argv, **kwargs):
+        if argv[:4] == ["/usr/bin/sudo", "-n", "/usr/bin/docker", "exec"]:
+            calls.append(list(argv))
+            return subprocess.CompletedProcess(argv, returncode, reply, "boom")
+        return units.run(argv, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", run)
+    return calls
+
+
+@pytest.mark.parametrize(("enabled", "request_text"), [(True, "{data: true}"), (False, "{data: false}")])
+def test_perception_debug_calls_set_bool_in_the_fm_axol_container(adapter, units, monkeypatch, enabled, request_text):
+    units.states[ROS_UNIT] = "active"
+    calls = serve_set_bool(monkeypatch, units)
+    outcome = adapter.perception_debug(enabled)
+    assert outcome.ok and outcome.detail == {"enabled": enabled, "lease_s": 60}
+    [argv] = calls
+    assert argv[:-1] == ["/usr/bin/sudo", "-n", "/usr/bin/docker", "exec", "fm-axol-ros-1", "bash", "-c"]
+    assert argv[-1] == (". /ws/install/setup.bash && timeout 8 ros2 service call /perception/set_debug "
+                        f"std_srvs/srv/SetBool '{request_text}'")
+
+
+def test_perception_debug_is_refused_while_the_container_is_down(adapter, units, monkeypatch):
+    calls = serve_set_bool(monkeypatch, units)
     outcome = adapter.perception_debug(True)
-    assert not outcome.ok and "no perception node" in outcome.message
+    assert not outcome.ok and outcome.detail == {"code": "stack_down"}
+    assert calls == []
+
+
+def test_perception_debug_relays_a_refusal_from_the_node(adapter, units, monkeypatch):
+    units.states[ROS_UNIT] = "active"
+    serve_set_bool(monkeypatch, units, reply="std_srvs.srv.SetBool_Response(success=False, message='')\n")
+    assert not adapter.perception_debug(True).ok
+
+
+@pytest.mark.parametrize(("returncode", "says"), [(124, "did not answer"), (1, "call failed")])
+def test_perception_debug_says_why_a_call_did_not_land(adapter, units, monkeypatch, returncode, says):
+    units.states[ROS_UNIT] = "active"
+    serve_set_bool(monkeypatch, units, reply="", returncode=returncode)
+    with pytest.raises(AdapterError, match=says):
+        adapter.perception_debug(True)
+
+
+def test_a_second_perception_debug_call_in_flight_is_refused_at_once(adapter):
+    adapter._perception_lock.acquire()
+    try:
+        outcome = adapter.perception_debug(True)
+    finally:
+        adapter._perception_lock.release()
+    assert not outcome.ok and outcome.detail == {"code": "busy"}
 
 
 

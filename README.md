@@ -407,8 +407,12 @@ from inside the loader's ros2 container. It refuses while the stack is down,
 and while another such call is in flight. The service call is bounded at 10 s;
 with the stack check before it, the worst case is 40 s. The node turns debug
 off itself 60 s after the last true, so a caller that goes away leaves nothing
-on. The body is the one boolean and nothing else; the Axol and the SO-101
-refuse the verb.
+on. The body is the one boolean and nothing else; the SO-101 refuses the verb.
+
+On the Axol the node runs on the workstation, and fm-comms bridges its service
+onto the robot's graph. The agent makes the same call inside fm-axol's
+container (`sudo -n docker exec fm-axol-ros-1`), so it refuses unless
+`fm-axol-ros.service` is up, which is `mode ros`.
 
 ```bash
 fm robot fm-rob-01 perception_debug on

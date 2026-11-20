@@ -18,6 +18,7 @@ arm: ``collect`` on the Anvil, only once armed locally, and the Axol's
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Protocol, runtime_checkable
 
@@ -32,6 +33,20 @@ SCHEMA_VERSION = 1
 #: perception node's own ``debug_lease_s`` default, reported so a caller knows
 #: how often to renew; the node, not the agent, enforces it.
 PERCEPTION_DEBUG_LEASE_S = 60
+
+#: The perception node's debug switch, and the two requests it is ever sent.
+#: The request is picked from this table, never formatted from the caller's
+#: value, so nothing off the fabric reaches a container's shell.
+PERCEPTION_DEBUG_SERVICE = "/perception/set_debug"
+PERCEPTION_DEBUG_TYPE = "std_srvs/srv/SetBool"
+PERCEPTION_DEBUG_REQUESTS = {True: "{data: true}", False: "{data: false}"}
+#: `ros2 service call` waits forever for a service that is not there, so the
+#: call is stopped inside the container first and the local exec after it.
+PERCEPTION_DEBUG_DEADLINE_S = 8
+PERCEPTION_DEBUG_TIMEOUT_S = 10
+#: The SetBool reply as `ros2 service call` prints it: a Python repr, parsed
+#: rather than answered by an rclpy client in a container the agent runs outside.
+SET_BOOL_SUCCESS = re.compile(r"success=(True|False)")
 
 
 class AdapterError(Exception):
@@ -194,9 +209,10 @@ class RobotAdapter(Protocol):
         """Turn the perception node's debug frames on, renewing their lease, or off.
 
         Calls ``/perception/set_debug`` (``std_srvs/srv/SetBool``) on the robot's
-        own graph. Debug frames move nothing; they cost bandwidth, which is why
-        the node turns them off :data:`PERCEPTION_DEBUG_LEASE_S` after the last
-        true. ``detail`` carries ``enabled`` and ``lease_s``. Refused when the
+        own graph, from inside its ROS container; the node may run elsewhere
+        and be bridged in. Debug frames move nothing; they cost bandwidth, which
+        is why the node turns them off :data:`PERCEPTION_DEBUG_LEASE_S` after
+        the last true. ``detail`` carries ``enabled`` and ``lease_s``. Refused when the
         stack is down, and by a robot with no perception node.
         """
 
