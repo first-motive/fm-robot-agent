@@ -182,12 +182,22 @@ def change(action: str, unit: str) -> tuple[bool, str]:
         return False, failure
     if action == "stop":
         return True, f"{unit} stopped"
+    done = f"{unit} {'started' if action == 'start' else 'restarted'}"
     state = settled_state(unit)
-    # A oneshot unit without RemainAfterExit runs to completion and goes back to
-    # inactive; that is a clean run, not a death.
-    if state != "active" and not (state == "inactive" and _show(unit, "Result") == "success"):
+    if state == "active":
+        return True, done
+    if state != "inactive":
         return False, f"{unit} is {state} after {action}"
-    return True, f"{unit} {'started' if action == 'start' else 'restarted'}"
+    # A oneshot without RemainAfterExit runs to completion and goes back to
+    # inactive; that is a clean run, not a death. Any other type that is
+    # inactive has stopped.
+    try:
+        shown = _properties(unit, "Type", "Result")
+    except AdapterError:
+        return False, f"{unit} is inactive after {action}, and whether it ran clean could not be read"
+    if shown.get("Type") == "oneshot" and shown.get("Result") == "success":
+        return True, f"{done}; it ran to completion"
+    return False, f"{unit} is inactive after {action}"
 
 
 def describe(units: list[str]) -> list[dict]:
@@ -229,12 +239,18 @@ def _restart_agent() -> tuple[bool, str]:
     except AdapterError as exc:
         return False, f"could not schedule the restart: {exc}"
     if done.returncode != 0:
-        return False, _journal("systemd-run of the agent's restart", done)
+        reason = _journal("systemd-run of the agent's restart", done)
+        # The timer's name is fixed, so a restart scheduled between the check
+        # above and this call fails as a name already taken.
+        if "already" in (done.stderr or done.stdout):
+            return True, f"{AGENT_UNIT} already restarts within 1 s"
+        return False, reason
     return True, f"{AGENT_UNIT} restarts in 1 s; this reply is its last"
 
 
-def _show(unit: str, prop: str) -> str:
-    return _read(["systemctl", "show", f"--property={prop}", "--value", unit]).strip()
+def _properties(unit: str, *props: str) -> dict[str, str]:
+    output = _read(["systemctl", "show", f"--property={','.join(props)}", unit])
+    return dict(line.partition("=")[::2] for line in output.splitlines() if "=" in line)
 
 
 def _read(argv: list[str]) -> str:

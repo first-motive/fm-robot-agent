@@ -1087,6 +1087,36 @@ def test_a_bus_unit_starts_once_almond_lets_go(adapter, server):
     assert adapter.guarded_unit_change("restart", ROS_UNIT, _changed).message == "changed"
 
 
+def _bus_lock_free(adapter) -> bool:
+    """Whether another thread could take the bus lock now. An RLock re-enters for its owner."""
+    free = []
+
+    def try_lock():
+        got = adapter._bus_lock.acquire(blocking=False)
+        free.append(got)
+        if got:
+            adapter._bus_lock.release()
+
+    other = threading.Thread(target=try_lock)
+    other.start()
+    other.join(5)
+    return free == [True]
+
+
+def test_a_non_bus_unit_change_runs_without_the_bus_lock(adapter, server):
+    """A camera restart must not make stop or a mode change wait behind it."""
+    seen = []
+    adapter.guarded_unit_change("restart", CAMERA_UNIT, lambda: seen.append(_bus_lock_free(adapter)) or _changed())
+    assert seen == [True]
+
+
+def test_a_bus_unit_change_runs_under_the_bus_lock(adapter, server):
+    server.state = "disconnected"
+    seen = []
+    adapter.guarded_unit_change("stop", CORE_UNIT, lambda: seen.append(_bus_lock_free(adapter)) or _changed())
+    assert seen == [False]
+
+
 def test_stops_and_other_units_are_never_refused_for_almond(adapter, server):
     server.state = "busy"
     assert adapter.guarded_unit_change("stop", CORE_UNIT, _changed).ok

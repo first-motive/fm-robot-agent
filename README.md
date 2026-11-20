@@ -381,14 +381,15 @@ systemctl or sudo printed goes to the agent's journal.
 
 A start or restart is good only once the unit has stayed `active` for 3 s, so a
 unit that dies on a bad config replies `ok: false` with the state it fell to. A
-oneshot that ran to completion (`inactive` with `Result=success`) is a good
-start. The agent refuses to stop itself, since nothing on the fabric could
+unit of `Type=oneshot` that ran to completion (`inactive` with
+`Result=success`) is a good start; any other type that went `inactive` is not.
+A change that ran still replies when a read after it fails, with what is known. The agent refuses to stop itself, since nothing on the fabric could
 start it again; a restart of `fm-robot-agent` replies first and runs one second
 later from a transient systemd timer, `fm-robot-agent-restart`, and a second
 request while that timer is pending schedules nothing. On the Axol, a start or
 restart of `fm-axol-core` or `fm-axol-ros` is refused while an Almond operation
 runs or Almond's link holds the buses, checked and done under the adapter's bus
-lock: `mode ros` does that handover in order. The verb answers only a named
+lock, which no other unit's change takes: `mode ros` does that handover in order. The verb answers only a named
 robot, never a wildcard.
 
 ```bash

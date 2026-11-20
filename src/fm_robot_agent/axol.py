@@ -785,23 +785,27 @@ class AxolAdapter:
             )
         return Outcome(ok=True, message=f"mode {ROS_MODE}", detail={"mode": ROS_MODE})
 
-    @_holding_bus_lock
     def guarded_unit_change(self, action: str, unit: str, change: Callable[[], Outcome]) -> Outcome:
         """Refuse a ``unit`` start or restart of the core or container while Almond holds the buses.
 
-        The check and the change run under the bus lock, as ``mode ros`` does,
-        so no verb can hand the buses to Almond between the two. Unlike the
+        A bus unit's check and change run under the bus lock, as ``mode ros``
+        does, so no verb can hand the buses to Almond between the two. Any other
+        unit runs without it, so ``stop`` and a mode change never wait behind a
+        camera restart. Unlike the
         mode, a caller driving one unit has not asked for Almond to be
         disconnected, so a link on the buses is refused and the reply points at
         ``mode ros``, which does the handover in order. A stop is never refused;
         it only ever takes a commander off the buses. Almond's own web UI is not
         behind this lock, the gap ``_enter_ros`` documents.
         """
-        if unit in BUS_UNITS and action in ("start", "restart"):
-            refusal = self._almond_refusal(f"{action} {unit}", link_too=True)
-            if refusal is not None:
-                return refusal
-        return change()
+        if unit not in BUS_UNITS:
+            return change()
+        with self._bus_lock:
+            if action in ("start", "restart"):
+                refusal = self._almond_refusal(f"{action} {unit}", link_too=True)
+                if refusal is not None:
+                    return refusal
+            return change()
 
     def _almond_refusal(self, what: str, *, link_too: bool) -> Outcome | None:
         """Refuse ``what`` while an Almond operation runs, and with ``link_too`` while its link holds the buses."""

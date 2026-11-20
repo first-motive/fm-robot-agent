@@ -396,7 +396,13 @@ def _unit(key: str, adapter: RobotAdapter, body: dict) -> Reply:
 
     def change() -> Outcome:
         ok, message = units.change(action, unit)
-        return Outcome(ok=ok, message=message, detail=units.describe([unit])[0])
+        # The change has run; a description that cannot be read now must not
+        # turn its reply into an error, so the bare state stands in for it.
+        try:
+            detail = units.describe([unit])[0]
+        except AdapterError:
+            detail = {"name": unit, "active": units.active_state(unit), "sub": "", "enabled": ""}
+        return Outcome(ok=ok, message=message, detail=detail)
 
     if isinstance(adapter, GuardsUnitChanges):
         return _outcome(key, adapter.guarded_unit_change(action, unit, change))

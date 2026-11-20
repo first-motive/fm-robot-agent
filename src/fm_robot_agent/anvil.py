@@ -228,7 +228,6 @@ SERVICE_TIMEOUT_S = 15
 POSE_TIMEOUT_S = 90
 COMPOSE_TIMEOUT_S = 30
 
-#: The stack check before a perception debug call is bounded by COMPOSE_TIMEOUT_S.
 
 
 #: The host's own memory accounting. The agent runs outside the containers, so

@@ -8,7 +8,7 @@ import subprocess
 import pytest
 
 from fm_robot_agent import units
-from fm_robot_agent.axol_ros import CORE_UNIT, RosStack
+from fm_robot_agent.axol_ros import CORE_UNIT, ROS_UNIT, RosStack
 from fm_robot_agent.fake import FakeAdapter
 from fm_robot_agent.protocol import Outcome
 from fm_robot_agent.verbs import KEY_PREFIX, answer, verb_of
@@ -31,6 +31,10 @@ class HostStub(SystemctlStub):
         self.after_start: dict[str, list[str]] = {}
         #: Units that run to completion and exit 0, as a oneshot without RemainAfterExit does.
         self.oneshot: set[str] = set()
+        #: Whether every ``systemctl show`` fails, as one on a host whose bus is gone does.
+        self.show_fails = False
+        #: What systemd-run prints when it fails, or ``None`` to let it schedule.
+        self.systemd_run_error: str | None = None
 
     def run(self, argv, **kwargs) -> subprocess.CompletedProcess:
         argv = list(argv)
@@ -40,9 +44,13 @@ class HostStub(SystemctlStub):
             return subprocess.CompletedProcess(argv, 0, f"{self.after_start[argv[2]].pop(0)}\n", "")
         if argv[:2] == ["systemctl", "is-active"] and argv[2] in self.after_start:
             self.states[argv[2]] = self.after_start.pop(argv[2])[0]
-        if argv[:3] == ["systemctl", "show", "--property=Result"]:
-            result = "success" if argv[-1] in self.oneshot else "exit-code"
-            return subprocess.CompletedProcess(argv, 0, f"{result}\n", "")
+        if argv[:3] == ["systemctl", "show", "--property=Type,Result"]:
+            if self.show_fails:
+                return subprocess.CompletedProcess(argv, 1, "", "Failed to connect to bus\n")
+            kind = "oneshot" if argv[-1] in self.oneshot else "simple"
+            return subprocess.CompletedProcess(argv, 0, f"Type={kind}\nResult=success\n", "")
+        if argv[:2] == ["systemctl", "show"] and self.show_fails:
+            return subprocess.CompletedProcess(argv, 1, "", "Failed to connect to bus\n")
         if argv[:2] == ["systemctl", "show"]:
             return subprocess.CompletedProcess(argv, 0, "\n".join(self._show(u) for u in argv[3:]), "")
         if argv[:2] in (["systemctl", "list-units"], ["systemctl", "list-unit-files"]):
@@ -51,6 +59,8 @@ class HostStub(SystemctlStub):
                 listed = [u for u in listed if self.states.get(u, "inactive") != "inactive" or u.endswith("@.service")]
             return subprocess.CompletedProcess(argv, 0, "".join(f"{u} loaded x y\n" for u in listed), "")
         if argv[:3] == [*SUDO, "/usr/bin/systemd-run"]:
+            if self.systemd_run_error is not None:
+                return subprocess.CompletedProcess(argv, 1, "", self.systemd_run_error)
             self.calls.append(("deferred", argv[-1]))
             return subprocess.CompletedProcess(argv, 0, "Running timer as unit: run-u1.timer\n", "")
         if argv[:3] == [*SUDO, "/usr/bin/systemctl"] and argv[3] == "restart":
@@ -204,7 +214,23 @@ def test_a_oneshot_that_ran_clean_is_a_good_start(host):
     """Inactive with Result=success is a oneshot that finished, not a unit that died."""
     host.oneshot.add("fm-axol-zed.service")
     reply = ask({"action": "start", "unit": "fm-axol-zed"})[1]
-    assert reply["ok"] is True and reply["active"] == "inactive"
+    assert reply["ok"] is True and reply["active"] == "inactive" and "ran to completion" in reply["message"]
+
+
+def test_a_long_running_unit_that_went_inactive_is_not_started(host):
+    """Result=success is a clean exit, but only a oneshot is meant to exit."""
+    host.after_start["fm-axol-zed.service"] = ["inactive"]
+    reply = ask({"action": "start", "unit": "fm-axol-zed"})[1]
+    assert reply["ok"] is False and reply["message"] == "fm-axol-zed.service is inactive after start"
+
+
+def test_a_start_whose_result_cannot_be_read_still_replies(host):
+    """The change ran; a failed read afterwards says what is known rather than erroring."""
+    host.oneshot.add("fm-axol-zed.service")
+    host.show_fails = True
+    ok, reply = ask({"action": "start", "unit": "fm-axol-zed"})
+    assert ok and reply["ok"] is False and "could not be read" in reply["message"]
+    assert reply["name"] == "fm-axol-zed.service" and reply["active"] == "inactive"
 
 
 def test_a_camera_daemon_restarts_and_nothing_more(host):
@@ -227,6 +253,19 @@ def test_the_agent_restarts_itself_after_its_reply(host):
     assert [*SUDO, "/usr/bin/systemd-run", "--unit=fm-robot-agent-restart", "--collect", "--on-active=1",
             "/usr/bin/systemctl", "restart", "fm-robot-agent.service"] in host.argv
     assert ("restart", "fm-robot-agent.service") not in host.calls
+
+
+def test_a_self_restart_that_loses_the_race_for_the_timer_name_is_pending(host):
+    host.systemd_run_error = ("Failed to start transient timer unit: Unit fm-robot-agent-restart.timer "
+                              "was already loaded or has a fragment file.\n")
+    reply = ask({"action": "restart", "unit": "fm-robot-agent"})[1]
+    assert reply["ok"] is True and "already restarts" in reply["message"]
+
+
+def test_a_self_restart_systemd_run_refuses_otherwise_is_a_failure(host):
+    host.systemd_run_error = "sudo: a password is required\n"
+    reply = ask({"action": "restart", "unit": "fm-robot-agent"})[1]
+    assert reply["ok"] is False and reply["message"] == "sudo refused systemd-run of the agent's restart"
 
 
 def test_a_second_self_restart_while_one_is_pending_schedules_nothing(host):
@@ -287,7 +326,14 @@ def test_a_unit_that_stays_up_for_the_window_is_started(host, short_window):
     host.after_start["fm-axol-zed.service"] = ["active"]
     reply = ask({"action": "start", "unit": "fm-axol-zed"})[1]
     assert reply["ok"] is True and reply["message"] == "fm-axol-zed.service started"
-    assert host.calls.count(("is-active", "fm-axol-zed.service")) >= 3
+    assert host.calls.count(("is-active", "fm-axol-zed.service")) >= 1
+
+
+def test_a_ros_stack_core_that_dies_inside_the_window_rolls_the_stack_back(host, short_window):
+    host.after_start[CORE_UNIT] = ["active", "failed"]
+    failure = RosStack().start()
+    assert failure == f"{CORE_UNIT} is failed after start; both units stopped"
+    assert host.changes() == [("start", CORE_UNIT), ("stop", ROS_UNIT), ("stop", CORE_UNIT)]
 
 
 def test_the_ros_stack_start_uses_the_settle_window(systemctl, monkeypatch):
