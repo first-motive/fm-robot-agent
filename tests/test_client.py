@@ -355,3 +355,16 @@ def test_perception_debug_sends_one_boolean(value, enabled):
 def test_perception_debug_needs_on_or_off():
     with pytest.raises(SystemExit):
         client.main(["fm-rob-01", "perception_debug", "maybe"])
+
+
+# --- unit --------------------------------------------------------------------
+
+
+def test_unit_defaults_to_list():
+    assert client.build_payload("unit", args(assignment=None)) == {"action": "list"}
+
+
+def test_unit_names_the_unit_an_action_acts_on():
+    assert client.build_payload("unit", args(value="restart", assignment="fm-axol-zed")) == {
+        "action": "restart", "unit": "fm-axol-zed",
+    }

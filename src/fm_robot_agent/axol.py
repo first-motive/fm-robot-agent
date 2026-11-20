@@ -38,15 +38,25 @@ import json
 import math
 import os
 import re
+import shlex
 import ssl
+import subprocess
+import sys
 import threading
 import time
 import urllib.error
 import urllib.request
+from collections.abc import Callable
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from fm_robot_agent.axol_ros import BUS_UNITS, IDLE_STATES, RosStack, holds_buses
+from fm_robot_agent.axol_ros import (
+    BUS_UNITS,
+    IDLE_STATES,
+    ROS_UNIT,
+    RosStack,
+    holds_buses,
+)
 from fm_robot_agent.cdr import joint_state
 from fm_robot_agent.config import (
     MODE,
@@ -56,7 +66,19 @@ from fm_robot_agent.config import (
     UNKNOWN,
     Setting,
 )
-from fm_robot_agent.protocol import AdapterError, Outcome, task_not_recorded
+from fm_robot_agent.protocol import (
+    PERCEPTION_DEBUG_DEADLINE_S,
+    PERCEPTION_DEBUG_LEASE_S,
+    PERCEPTION_DEBUG_REQUESTS,
+    PERCEPTION_DEBUG_SERVICE,
+    PERCEPTION_DEBUG_TIMEOUT_S,
+    PERCEPTION_DEBUG_TYPE,
+    SET_BOOL_SUCCESS,
+    TIMEOUT_EXIT,
+    AdapterError,
+    Outcome,
+    task_not_recorded,
+)
 
 KIND = "axol"
 
@@ -76,6 +98,13 @@ MODES = {
 
 #: The mode that runs fm-axol's ROS stack instead of an Almond operation.
 ROS_MODE = "ros"
+
+#: How a ROS service is called on the Axol: inside fm-axol's container, which is
+#: compose project ``fm-axol``, service ``ros``, and already carries the RMW and
+#: the loopback DDS config in its environment. The container's socket is
+#: root's, and the robot user's sudo rule reaches it with no password.
+ROS_EXEC = ("/usr/bin/sudo", "-n", "/usr/bin/docker", "exec", "fm-axol-ros-1", "bash", "-c")
+ROS_SETUP = "/ws/install/setup.bash"
 
 #: Every mode `status` reports, Almond's operations and `ros` together.
 ALL_MODES = tuple(sorted((*MODES, ROS_MODE)))
@@ -294,6 +323,7 @@ class AxolAdapter:
         # `config_write` of the mode reaches `set_mode`. A stop waits out a start
         # in flight rather than racing it.
         self._bus_lock = threading.RLock()
+        self._perception_lock = threading.Lock()
 
     # --- the verb set --------------------------------------------------------
 
@@ -524,7 +554,45 @@ class AxolAdapter:
         return Outcome(ok=False, message="the Axol has no collection loop")
 
     def perception_debug(self, enabled: bool) -> Outcome:
-        return Outcome(ok=False, message="the Axol runs no perception node")
+        """Switch perception's debug frames through its SetBool service.
+
+        The node runs on the workstation and fm-comms bridges its service onto
+        the Axol's own graph, so the call is made where any ROS call here is:
+        inside fm-axol's container. Refused unless that container is up, and
+        while another switch is in flight, for the reason the Anvil's is.
+        """
+        if not self._perception_lock.acquire(blocking=False):
+            return Outcome(ok=False, message="busy: another perception debug call is still running",
+                           detail={"code": "busy"})
+        try:
+            return self._perception_debug(enabled)
+        finally:
+            self._perception_lock.release()
+
+    def _perception_debug(self, enabled: bool) -> Outcome:
+        if self.ros.states().get(ROS_UNIT) != "active":
+            return Outcome(ok=False, message=f"{ROS_UNIT} is not up; enter mode {ROS_MODE} before asking for "
+                           "perception debug", detail={"code": "stack_down"})
+        call = (f"ros2 service call {shlex.quote(PERCEPTION_DEBUG_SERVICE)} {shlex.quote(PERCEPTION_DEBUG_TYPE)} "
+                f"{shlex.quote(PERCEPTION_DEBUG_REQUESTS[enabled])}")
+        try:
+            done = subprocess.run(
+                [*ROS_EXEC, f". {ROS_SETUP} && timeout {PERCEPTION_DEBUG_DEADLINE_S} {call}"],
+                capture_output=True, text=True, timeout=PERCEPTION_DEBUG_TIMEOUT_S, check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            print(f"fm-robot-agent: perception debug: {exc}", file=sys.stderr, flush=True)
+            raise AdapterError(f"{PERCEPTION_DEBUG_SERVICE} did not answer; is perception running?") from exc
+        if done.returncode == TIMEOUT_EXIT:
+            raise AdapterError(f"{PERCEPTION_DEBUG_SERVICE} did not answer; is perception running?")
+        if done.returncode != 0:
+            print(f"fm-robot-agent: perception debug: {done.stderr.strip()}", file=sys.stderr, flush=True)
+            raise AdapterError(f"the {PERCEPTION_DEBUG_SERVICE} call failed")
+        success = SET_BOOL_SUCCESS.search(done.stdout)
+        if success is None or success.group(1) != "True":
+            return Outcome(ok=False, message=f"{PERCEPTION_DEBUG_SERVICE} refused the request")
+        return Outcome(ok=True, message=f"perception debug {'on' if enabled else 'off'}",
+                       detail={"enabled": enabled, "lease_s": PERCEPTION_DEBUG_LEASE_S})
 
     @_holding_bus_lock
     def record(self, dataset: str, action: str, task: str = "", note: str = "", episode: str = "") -> Outcome:
@@ -701,8 +769,9 @@ class AxolAdapter:
             return Outcome(ok=False, message=f"mode {ROS_MODE} takes no arguments")
         if self.ros.active():
             return Outcome(ok=True, message=f"mode {ROS_MODE}", detail={"mode": ROS_MODE})
-        if self._get("/api/op/status").get("running"):
-            return Outcome(ok=False, message=f"an Almond operation is running; stop it before mode {ROS_MODE}")
+        refusal = self._almond_refusal(f"mode {ROS_MODE}", link_too=False)
+        if refusal is not None:
+            return refusal
         self._post("/api/robot/disconnect", {})
         failure = self.ros.start()
         if failure is not None:
@@ -715,6 +784,41 @@ class AxolAdapter:
                 detail={"mode": ROS_MODE, "camera_failure": camera_failure},
             )
         return Outcome(ok=True, message=f"mode {ROS_MODE}", detail={"mode": ROS_MODE})
+
+    def guarded_unit_change(self, action: str, unit: str, change: Callable[[], Outcome]) -> Outcome:
+        """Refuse a ``unit`` start or restart of the core or container while Almond holds the buses.
+
+        A bus unit's check and change run under the bus lock, as ``mode ros``
+        does, so no verb can hand the buses to Almond between the two. Any other
+        unit runs without it, so ``stop`` and a mode change never wait behind a
+        camera restart. Unlike the
+        mode, a caller driving one unit has not asked for Almond to be
+        disconnected, so a link on the buses is refused and the reply points at
+        ``mode ros``, which does the handover in order. A stop is never refused;
+        it only ever takes a commander off the buses. Almond's own web UI is not
+        behind this lock, the gap ``_enter_ros`` documents.
+        """
+        if unit not in BUS_UNITS:
+            return change()
+        with self._bus_lock:
+            if action in ("start", "restart"):
+                refusal = self._almond_refusal(f"{action} {unit}", link_too=True)
+                if refusal is not None:
+                    return refusal
+            return change()
+
+    def _almond_refusal(self, what: str, *, link_too: bool) -> Outcome | None:
+        """Refuse ``what`` while an Almond operation runs, and with ``link_too`` while its link holds the buses."""
+        if self._get("/api/op/status").get("running"):
+            return Outcome(ok=False, message=f"an Almond operation is running; stop it before {what}")
+        if link_too:
+            almond_state = self._get("/api/robot/status").get("state")
+            if almond_state in ALMOND_HOLDS_BUSES:
+                return Outcome(
+                    ok=False,
+                    message=f"Almond is {almond_state} on the buses; use mode {ROS_MODE} to hand them over",
+                )
+        return None
 
     def _ros_refusal(self, what: str) -> Outcome | None:
         """Refuse an Almond operation while ``ros`` mode holds the buses."""

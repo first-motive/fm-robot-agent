@@ -9,7 +9,7 @@ verb set over Zenoh:
 
 ```
 status · up · down · config · record · stop · episodes · session · collect
-description · asset · calibration · perception_debug
+description · asset · calibration · perception_debug · unit
 ```
 
 Every byte reaches the fleet through the Zenoh router on 7447, so a robot is
@@ -318,7 +318,7 @@ in one process, so the two exclude each other:
 ```
 mode ros   refused while an Almond operation runs (teleop, gravity-comp, policy, recording)
            disconnects Almond's link, then starts fm-axol-core.service, then fm-axol-ros.service
-           a unit that fails or is not active after start stops both units again
+           a unit that fails, or is not active for 3 s after start, stops both units again
            then starts fm-axol-zed.service; a camera failure still enters the mode
            and the reply names it ("mode ros, without cameras: ...")
 while on   mode, record start and up are refused; status reports mode ros and the units (see below)
@@ -355,6 +355,48 @@ the stack up, the mode reply names its failure, and the desktop's own camera
 check catches the missing previews. A unit in any other state, such as
 `activating` or `unresponsive`, is always listed under its own word.
 
+## Host Units
+
+`unit` lists this host's First Motive systemd units and starts, stops or
+restarts one of them, so a stuck camera or container is recovered without ssh:
+
+```
+fm/robot/<ns>/unit   {"action": "list"}                              every fm-* service, and the camera daemons present
+                     {"action": "status",  "unit": "fm-axol-zed"}    one unit
+                     {"action": "start",   "unit": "fm-axol-zed"}    start, stop or restart one unit
+reply (list)         {"ok": true, "units": [{"name", "active", "sub", "enabled"}, ...]}
+reply (others)       {"ok": <bool>, "message": "...", "name", "active", "sub", "enabled"}
+```
+
+A name is `fm-<lowercase, digits, hyphens>`, with or without `.service`, or one
+of the platform's camera daemons, `zed_x_daemon` and `nvargus-daemon`, which
+take `status` and `restart` only. Anything else is refused before `systemctl`
+runs. `active`, `sub` and `enabled` are systemd's `ActiveState`, `SubState` and
+`UnitFileState`; a unit the host lacks reads `enabled: not-found`. Changes run
+as `sudo -n systemctl` and the agent's self-restart as `sudo -n systemd-run`,
+so the robot user needs passwordless sudo for both; `fm-setup`'s `robot-sudo`
+grants it for every command. A failed change replies with a short reason
+(`systemctl start fm-axol-zed.service failed`, `sudo refused ...`); what
+systemctl or sudo printed goes to the agent's journal.
+
+A start or restart is good only once the unit has stayed `active` for 3 s, so a
+unit that dies on a bad config replies `ok: false` with the state it fell to. A
+unit of `Type=oneshot` that ran to completion (`inactive` with
+`Result=success`) is a good start; any other type that went `inactive` is not.
+A change that ran still replies when a read after it fails, with what is known. The agent refuses to stop itself, since nothing on the fabric could
+start it again; a restart of `fm-robot-agent` replies first and runs one second
+later from a transient systemd timer, `fm-robot-agent-restart`, and a second
+request while that timer is pending schedules nothing. On the Axol, a start or
+restart of `fm-axol-core` or `fm-axol-ros` is refused while an Almond operation
+runs or Almond's link holds the buses, checked and done under the adapter's bus
+lock, which no other unit's change takes: `mode ros` does that handover in order. The verb answers only a named
+robot, never a wildcard.
+
+```bash
+fm robot fm-rob-02 unit list
+fm robot fm-rob-02 unit restart fm-axol-zed
+```
+
 ## Perception Debug
 
 The perception node publishes its debug frames (every candidate, mask and gate
@@ -372,8 +414,12 @@ from inside the loader's ros2 container. It refuses while the stack is down,
 and while another such call is in flight. The service call is bounded at 10 s;
 with the stack check before it, the worst case is 40 s. The node turns debug
 off itself 60 s after the last true, so a caller that goes away leaves nothing
-on. The body is the one boolean and nothing else; the Axol and the SO-101
-refuse the verb.
+on. The body is the one boolean and nothing else; the SO-101 refuses the verb.
+
+On the Axol the node runs on the workstation, and fm-comms bridges its service
+onto the robot's graph. The agent makes the same call inside fm-axol's
+container (`sudo -n docker exec fm-axol-ros-1`), so it refuses unless
+`fm-axol-ros.service` is up, which is `mode ros`.
 
 ```bash
 fm robot fm-rob-01 perception_debug on

@@ -24,7 +24,7 @@ from fm_robot_agent.axol import (
 )
 from fm_robot_agent.axol_ros import CAMERA_UNIT, CORE_UNIT, ROS_UNIT, SUDOERS_RULE
 from fm_robot_agent.config import MODE, MODE_ALIAS, MOTION, TUNING
-from fm_robot_agent.protocol import AdapterError
+from fm_robot_agent.protocol import AdapterError, Outcome
 
 
 class ServerStub:
@@ -429,13 +429,14 @@ def test_a_failed_ros_start_rolls_both_units_back(adapter, units):
     assert adapter.status()["mode"] is None
 
 
-def test_a_sudo_refusal_fails_ros_mode_with_a_clear_reason(adapter, units):
+def test_a_sudo_refusal_fails_ros_mode_with_a_clear_reason(adapter, units, capsys):
     units.sudo_refusal = "sudo: a password is required\n"
 
     outcome = adapter.set_mode(ROS_MODE)
 
     assert outcome.ok is False
-    assert "sudo refused" in outcome.message and SUDOERS_RULE in outcome.message
+    assert "sudo refused" in outcome.message
+    assert SUDOERS_RULE in capsys.readouterr().err
     assert adapter.status()["mode"] is None
 
 
@@ -1060,9 +1061,148 @@ def test_there_is_no_collection_loop(adapter, server):
     assert server.running_op is None
 
 
-def test_there_is_no_perception_node(adapter, server):
+def _changed():
+    return Outcome(ok=True, message="changed")
+
+
+@pytest.mark.parametrize("action", ["start", "restart"])
+@pytest.mark.parametrize("unit", [CORE_UNIT, ROS_UNIT])
+def test_a_bus_unit_start_is_refused_while_almond_holds_the_buses(adapter, server, action, unit):
+    server.state = "connected"
+    ran = []
+    outcome = adapter.guarded_unit_change(action, unit, lambda: ran.append(1) or _changed())
+    assert not outcome.ok and "mode ros" in outcome.message
+    assert ran == []
+
+
+def test_a_bus_unit_start_is_refused_while_an_almond_operation_runs(adapter, server):
+    server.state = "disconnected"
+    server.running_op = "teleop"
+    outcome = adapter.guarded_unit_change("start", CORE_UNIT, _changed)
+    assert not outcome.ok and "operation is running" in outcome.message
+
+
+def test_a_bus_unit_starts_once_almond_lets_go(adapter, server):
+    server.state = "disconnected"
+    assert adapter.guarded_unit_change("restart", ROS_UNIT, _changed).message == "changed"
+
+
+def _bus_lock_free(adapter) -> bool:
+    """Whether another thread could take the bus lock now. An RLock re-enters for its owner."""
+    free = []
+
+    def try_lock():
+        got = adapter._bus_lock.acquire(blocking=False)
+        free.append(got)
+        if got:
+            adapter._bus_lock.release()
+
+    other = threading.Thread(target=try_lock)
+    other.start()
+    other.join(5)
+    return free == [True]
+
+
+def test_a_non_bus_unit_change_runs_without_the_bus_lock(adapter, server):
+    """A camera restart must not make stop or a mode change wait behind it."""
+    seen = []
+    adapter.guarded_unit_change("restart", CAMERA_UNIT, lambda: seen.append(_bus_lock_free(adapter)) or _changed())
+    assert seen == [True]
+
+
+def test_a_bus_unit_change_runs_under_the_bus_lock(adapter, server):
+    server.state = "disconnected"
+    seen = []
+    adapter.guarded_unit_change("stop", CORE_UNIT, lambda: seen.append(_bus_lock_free(adapter)) or _changed())
+    assert seen == [False]
+
+
+def test_stops_and_other_units_are_never_refused_for_almond(adapter, server):
+    server.state = "busy"
+    assert adapter.guarded_unit_change("stop", CORE_UNIT, _changed).ok
+    assert adapter.guarded_unit_change("restart", CAMERA_UNIT, _changed).ok
+
+
+def test_a_unit_change_holds_the_bus_lock_through_the_change(adapter, server):
+    """A check released before its change would let mode ros or a recording slip in between."""
+    server.state = "disconnected"
+    entered = threading.Event()
+    release = threading.Event()
+
+    def slow_change():
+        entered.set()
+        release.wait(5)
+        return _changed()
+
+    worker = threading.Thread(target=adapter.guarded_unit_change, args=("start", CORE_UNIT, slow_change))
+    worker.start()
+    assert entered.wait(5)
+    try:
+        assert adapter._bus_lock.acquire(blocking=False) is False
+    finally:
+        release.set()
+        worker.join(5)
+    assert adapter._bus_lock.acquire(blocking=False) is True
+    adapter._bus_lock.release()
+
+
+SET_BOOL_OK = "response:\nstd_srvs.srv.SetBool_Response(success=True, message='debug on')\n"
+
+
+def serve_set_bool(monkeypatch, units, reply=SET_BOOL_OK, returncode=0):
+    """The fm-axol container answering one SetBool call; units still go to the stub."""
+    calls = []
+
+    def run(argv, **kwargs):
+        if argv[:4] == ["/usr/bin/sudo", "-n", "/usr/bin/docker", "exec"]:
+            calls.append(list(argv))
+            return subprocess.CompletedProcess(argv, returncode, reply, "boom")
+        return units.run(argv, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", run)
+    return calls
+
+
+@pytest.mark.parametrize(("enabled", "request_text"), [(True, "{data: true}"), (False, "{data: false}")])
+def test_perception_debug_calls_set_bool_in_the_fm_axol_container(adapter, units, monkeypatch, enabled, request_text):
+    units.states[ROS_UNIT] = "active"
+    calls = serve_set_bool(monkeypatch, units)
+    outcome = adapter.perception_debug(enabled)
+    assert outcome.ok and outcome.detail == {"enabled": enabled, "lease_s": 60}
+    [argv] = calls
+    assert argv[:-1] == ["/usr/bin/sudo", "-n", "/usr/bin/docker", "exec", "fm-axol-ros-1", "bash", "-c"]
+    assert argv[-1] == (". /ws/install/setup.bash && timeout 8 ros2 service call /perception/set_debug "
+                        f"std_srvs/srv/SetBool '{request_text}'")
+
+
+def test_perception_debug_is_refused_while_the_container_is_down(adapter, units, monkeypatch):
+    calls = serve_set_bool(monkeypatch, units)
     outcome = adapter.perception_debug(True)
-    assert not outcome.ok and "no perception node" in outcome.message
+    assert not outcome.ok and outcome.detail == {"code": "stack_down"}
+    assert calls == []
+
+
+def test_perception_debug_relays_a_refusal_from_the_node(adapter, units, monkeypatch):
+    units.states[ROS_UNIT] = "active"
+    serve_set_bool(monkeypatch, units, reply="std_srvs.srv.SetBool_Response(success=False, message='')\n")
+    assert not adapter.perception_debug(True).ok
+
+
+@pytest.mark.parametrize(("returncode", "says"), [(124, "did not answer"), (1, "call failed")])
+def test_perception_debug_says_why_a_call_did_not_land(adapter, units, monkeypatch, returncode, says):
+    units.states[ROS_UNIT] = "active"
+    serve_set_bool(monkeypatch, units, reply="", returncode=returncode)
+    with pytest.raises(AdapterError, match=says):
+        adapter.perception_debug(True)
+
+
+def test_a_second_perception_debug_call_in_flight_is_refused_at_once(adapter):
+    adapter._perception_lock.acquire()
+    try:
+        outcome = adapter.perception_debug(True)
+    finally:
+        adapter._perception_lock.release()
+    assert not outcome.ok and outcome.detail == {"code": "busy"}
 
 
 

@@ -70,7 +70,14 @@ from fm_robot_agent.config import (
 )
 from fm_robot_agent.description import DescriptionBundle
 from fm_robot_agent.protocol import (
+    PERCEPTION_DEBUG_DEADLINE_S,
     PERCEPTION_DEBUG_LEASE_S,
+    PERCEPTION_DEBUG_REQUESTS,
+    PERCEPTION_DEBUG_SERVICE,
+    PERCEPTION_DEBUG_TIMEOUT_S,
+    PERCEPTION_DEBUG_TYPE,
+    SET_BOOL_SUCCESS,
+    TIMEOUT_EXIT,
     AdapterError,
     Outcome,
     task_not_recorded,
@@ -221,23 +228,7 @@ SERVICE_TIMEOUT_S = 15
 POSE_TIMEOUT_S = 90
 COMPOSE_TIMEOUT_S = 30
 
-#: The perception node's debug switch, and the two requests it is ever sent.
-#: The request is picked from this table, never formatted from the caller's
-#: value, so nothing off the fabric reaches the container's shell.
-PERCEPTION_DEBUG_SERVICE = "/perception/set_debug"
-PERCEPTION_DEBUG_TYPE = "std_srvs/srv/SetBool"
-PERCEPTION_DEBUG_REQUESTS = {True: "{data: true}", False: "{data: false}"}
-#: `ros2 service call` waits forever for a service that is not there, so the
-#: call is stopped inside the container first and the local exec after it.
-#: The stack check before it is bounded by COMPOSE_TIMEOUT_S.
-PERCEPTION_DEBUG_DEADLINE_S = 8
-PERCEPTION_DEBUG_TIMEOUT_S = 10
-#: The SetBool reply as `ros2 service call` prints it, the same repr parse
-#: IS_RECORDING_PATTERN makes.
-SET_BOOL_SUCCESS = re.compile(r"success=(True|False)")
 
-#: What coreutils `timeout` exits with when it stopped the command.
-TIMEOUT_EXIT = 124
 
 #: The host's own memory accounting. The agent runs outside the containers, so
 #: this is the whole devbox — the number the kernel's OOM killer acts on.

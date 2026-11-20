@@ -61,11 +61,14 @@ def test_starts_and_stops_run_one_unit_each_under_non_interactive_sudo(systemctl
 
 
 @pytest.mark.parametrize("refusal", SUDO_REFUSALS, ids=["password", "not-allowed", "no-rule"])
-def test_a_sudo_refusal_is_a_failed_start_that_names_the_rule(systemctl, refusal):
+def test_a_sudo_refusal_is_a_failed_start_that_names_the_rule_in_the_journal(systemctl, refusal, capsys):
+    """The rule's path and sudo's own words stay on the host; the fabric gets the short reason."""
     systemctl.sudo_refusal = refusal
     failure = RosStack().start()
     assert failure.startswith(f"sudo refused systemctl start {CORE_UNIT}")
-    assert SUDOERS_RULE in failure
+    assert SUDOERS_RULE not in failure
+    journal = capsys.readouterr().err
+    assert SUDOERS_RULE in journal and refusal.strip() in journal
     assert ("start", ROS_UNIT) not in systemctl.changes()
 
 
