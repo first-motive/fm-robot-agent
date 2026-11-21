@@ -1198,3 +1198,13 @@ def test_first_event_reads_silence_after_start_as_no_value():
         else:
             raise AssertionError("without idle_s, silence is a fault")
         server.shutdown()
+
+
+# --- task --------------------------------------------------------------------
+
+
+def test_the_anvil_refuses_every_task_action(adapter):
+    """Its supervised behaviour is the collection loop, behind its own verb."""
+    for action, options in (("list", None), ("start", {"task": "pick_place"}), ("stop", None), ("status", None)):
+        outcome = adapter.task(action, options)
+        assert not outcome.ok and outcome.detail == {"code": "unsupported"}

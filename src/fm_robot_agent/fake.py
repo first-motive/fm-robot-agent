@@ -20,7 +20,12 @@ from fm_robot_agent.config import (
     UNKNOWN,
     Setting,
 )
-from fm_robot_agent.protocol import PERCEPTION_DEBUG_LEASE_S, Outcome, task_not_recorded
+from fm_robot_agent.protocol import (
+    PERCEPTION_DEBUG_LEASE_S,
+    TASK_UNSUPPORTED,
+    Outcome,
+    task_not_recorded,
+)
 
 MODES = ("idle", "teleop")
 
@@ -193,6 +198,9 @@ class FakeAdapter:
         self.perception_debug_enabled = enabled
         return Outcome(ok=True, message=f"perception debug {'on' if enabled else 'off'}",
                        detail={"enabled": enabled, "lease_s": PERCEPTION_DEBUG_LEASE_S})
+
+    def task(self, action: str, options: dict[str, str] | None = None) -> Outcome:
+        return Outcome(ok=False, message="the fake runs no tasks", detail={"code": TASK_UNSUPPORTED})
 
     def stop(self) -> Outcome:
         self.recording = None

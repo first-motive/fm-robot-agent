@@ -77,6 +77,7 @@ from fm_robot_agent.protocol import (
     PERCEPTION_DEBUG_TIMEOUT_S,
     PERCEPTION_DEBUG_TYPE,
     SET_BOOL_SUCCESS,
+    TASK_UNSUPPORTED,
     TIMEOUT_EXIT,
     AdapterError,
     Outcome,
@@ -579,6 +580,11 @@ class AnvilAdapter:
             return self._perception_debug(enabled)
         finally:
             self._perception_lock.release()
+
+    def task(self, action: str, options: dict[str, str] | None = None) -> Outcome:
+        """The Anvil's supervised behaviour is its collection loop, behind `collect`."""
+        return Outcome(ok=False, message="the Anvil runs no tasks; its loop is `collect`",
+                       detail={"code": TASK_UNSUPPORTED})
 
     def _perception_debug(self, enabled: bool) -> Outcome:
         if not self._stack_running():

@@ -9,7 +9,7 @@ verb set over Zenoh:
 
 ```
 status · up · down · config · record · stop · episodes · session · collect
-description · asset · calibration · perception_debug · unit
+description · asset · calibration · perception_debug · unit · task
 ```
 
 Every byte reaches the fleet through the Zenoh router on 7447, so a robot is
@@ -426,6 +426,43 @@ fm robot fm-rob-01 perception_debug on
 fm robot fm-rob-01 perception_debug off
 ```
 
+## Axol Tasks
+
+`task` runs one supervised task on the Axol: fm-skills' task client, which
+drives the arms through fm-axol's graph. One task exists, `pick_place`.
+
+```
+fm/robot/<ns>/task   {"action": "list"}                                  the tasks this robot runs
+                     {"action": "start", "task": "pick_place",
+                      "object": "can", "pack": "axol_cans"}              object and pack optional
+                     {"action": "stop"}
+                     {"action": "status"}                                the default
+reply                {"ok": true, "message": "...", "run": RunState | null}   (list: "tasks")
+refusal              {"ok": false, "message": "...", "code": "unsupported" | "not_ros" |
+                      "skills_down" | "busy" | "unknown_task"}
+```
+
+`RunState` carries `task`, `state` (`running`, `succeeded`, `failed` or
+`stopped`), `object`, `pack`, `started_at` and `ended_at` in epoch seconds,
+`result` (the client's result line) and `log` (its last 40 output lines). The
+agent keeps the last finished run, so `status` shows how it ended.
+
+A start is refused unless `mode ros` is on, the `fm-skills` container is
+running, and no run is in flight. The agent runs
+`docker exec fm-skills bash -lc '... ros2 run fm_skills_task task_client'` with
+no sudo, since its user is in the docker group. A stop sends SIGINT to the
+client inside the container, which cancels its goal; the run reads `stopped`
+once the client exits. `stop` and `down` stop a running task first, and wait
+up to 2 s for it, before they leave `ros` mode. The Anvil and the SO-101
+refuse the verb with `unsupported`.
+
+```bash
+fm robot fm-rob-02 task list
+fm robot fm-rob-02 task start --task pick_place --object can --pack axol_cans
+fm robot fm-rob-02 task status
+fm robot fm-rob-02 task stop
+```
+
 ## Status
 
 This repo was seeded from the HTTP agent running on the Anvil workcell devbox,
@@ -441,7 +478,7 @@ process on the buses is gone before Almond's disconnect runs.
 The fabric never sends a pose, trajectory or command topic. It can start and
 stop supervised behaviours that move the arm: `collect` on the Anvil, only once
 armed locally and behind the robot's own preflight, and the Axol's
-`run-policy`. The Axol's `ros` mode starts fm-axol's stack, which takes motion
+`run-policy` and `task`. The Axol's `ros` mode starts fm-axol's stack, which takes motion
 commands from ROS on the robot's own loopback, never from the fabric.
 
 No configuration key commands motion either. The keys that shape how the arms

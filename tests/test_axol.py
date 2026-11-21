@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pytest
 
+from fm_robot_agent import axol_task
 from fm_robot_agent.axol import (
     ALL_MODES,
     KIND,
@@ -26,6 +27,7 @@ from fm_robot_agent.axol import (
     _stack_words,
 )
 from fm_robot_agent.axol_ros import CAMERA_UNIT, CORE_UNIT, ROS_UNIT, SUDOERS_RULE
+from fm_robot_agent.axol_task import DOCKER, TASK_CLIENT, TaskRun, task_script
 from fm_robot_agent.config import MODE, MODE_ALIAS, MOTION, TUNING
 from fm_robot_agent.protocol import AdapterError, Outcome
 
@@ -1356,3 +1358,258 @@ def test_almonds_reason_is_read_only_from_a_string_error_field(body, reason):
 
     fp = io.BytesIO(body) if body is not None else None
     assert _almond_error(urllib.error.HTTPError("/x", 409, "Conflict", None, fp)) == reason
+
+
+# --- task --------------------------------------------------------------------
+
+
+class TaskClientStub:
+    """fm-skills' task client as Popen hands it back: its lines, then an exit the test releases."""
+
+    def __init__(self, lines: list[str], returncode: int) -> None:
+        self.returncode = returncode
+        self.exited = threading.Event()
+        self.stdout = self._read(lines)
+
+    def _read(self, lines):
+        yield from (f"{line}\n" for line in lines)
+        self.exited.wait(5)
+
+    def wait(self, timeout=None):
+        if not self.exited.wait(5 if timeout is None else timeout):
+            raise subprocess.TimeoutExpired(TASK_CLIENT, timeout)
+        return self.returncode
+
+
+class SkillsStub:
+    """docker for fm-skills' container, beside the systemctl stub every Axol test has."""
+
+    def __init__(self, units) -> None:
+        self.units = units
+        self.running = True
+        self.calls: list[list[str]] = []
+        self.client = TaskClientStub(["planning", "result placed (code 0), pick attempts 1"], 0)
+        #: Whether fm-axol's container was still up when the stop signal arrived.
+        self.graph_up_at_interrupt: bool | None = None
+        #: How the stop signal fails: an exit code, or an exception to raise.
+        self.pkill_fails: int | BaseException | None = None
+        #: A client that outlasts the stop's wait.
+        self.client_ignores_interrupt = False
+        self.popen_fails = False
+        self.popen_kwargs: dict = {}
+
+    def run(self, argv, **kwargs):
+        if argv[0] != DOCKER:
+            return self.units.run(argv, **kwargs)
+        self.calls.append(list(argv))
+        if argv[1] == "inspect":
+            return subprocess.CompletedProcess(argv, 0, "true\n" if self.running else "false\n", "")
+        self.graph_up_at_interrupt = self.units.states.get(ROS_UNIT) == "active"
+        if self.pkill_fails is not None:
+            if isinstance(self.pkill_fails, int):
+                return subprocess.CompletedProcess(argv, self.pkill_fails, "", "pkill: boom")
+            raise self.pkill_fails
+        if not self.client_ignores_interrupt:
+            self.client.returncode = 130
+            self.client.exited.set()
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    def popen(self, argv, **kwargs):
+        self.calls.append(list(argv))
+        self.popen_kwargs = kwargs
+        if self.popen_fails:
+            raise FileNotFoundError(DOCKER)
+        return self.client
+
+
+@pytest.fixture
+def skills(units, monkeypatch) -> SkillsStub:
+    stub = SkillsStub(units)
+    units.states.update(ROS_UP)
+    monkeypatch.setattr(subprocess, "run", stub.run)
+    monkeypatch.setattr(subprocess, "Popen", stub.popen)
+    return stub
+
+
+def settled(adapter) -> dict:
+    """The run once its reader thread has decided how it ended."""
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        run = adapter.task("status").detail["run"]
+        if run["state"] != "running":
+            return run
+        time.sleep(0.01)
+    raise AssertionError("the task never settled")
+
+
+START = {"task": "pick_place", "object": "can", "pack": "axol_cans"}
+
+
+def test_task_list_names_pick_place(adapter):
+    assert adapter.task("list").detail == {"tasks": [{"name": "pick_place", "title": "Pick and place",
+                                                      "fields": ("object", "pack")}]}
+
+
+def test_task_start_runs_the_client_in_fm_skills_without_sudo(adapter, skills):
+    outcome = adapter.task("start", START)
+    assert outcome.ok and outcome.message == "pick_place started"
+    assert outcome.detail["run"]["state"] == "running"
+    assert skills.calls == [
+        [DOCKER, "inspect", "-f", "{{.State.Running}}", "fm-skills"],
+        [DOCKER, "exec", "fm-skills", "bash", "-lc",
+         ("source /opt/ros/jazzy/setup.bash; source /workspace/install/setup.bash; "
+          "exec ros2 run fm_skills_task task_client --ros-args -p object:=can -p pack:=axol_cans")],
+    ]
+
+
+def test_a_task_start_with_no_fields_passes_no_ros_args(adapter, skills):
+    adapter.task("start", {"task": "pick_place"})
+    assert skills.calls[-1][-1].endswith("exec ros2 run fm_skills_task task_client")
+
+
+def test_a_task_value_reaches_the_shell_quoted():
+    run = TaskRun(task="pick_place", object="a b", pack="", started_at=0.0)
+    assert task_script(run).endswith("--ros-args -p object:='a b'")
+
+
+def test_a_run_with_a_code_0_result_succeeds_and_stays_for_status(adapter, skills):
+    adapter.task("start", START)
+    skills.client.exited.set()
+    run = settled(adapter)
+    assert run["state"] == "succeeded" and run["ended_at"] is not None
+    assert run["result"] == "result placed (code 0), pick attempts 1"
+    assert run["log"] == ["planning", "result placed (code 0), pick attempts 1"]
+    assert (run["task"], run["object"], run["pack"]) == ("pick_place", "can", "axol_cans")
+
+
+@pytest.mark.parametrize(("lines", "returncode"), [
+    (["result no_object (code 3), pick attempts 2"], 0),       # an exit 0 the client did not succeed in
+    (["result placed (code 0), pick attempts 1"], 1),
+    (["Traceback (most recent call last):"], 1),
+])
+def test_any_other_ending_fails(adapter, skills, lines, returncode):
+    skills.client = TaskClientStub(lines, returncode)
+    adapter.task("start", START)
+    skills.client.exited.set()
+    assert settled(adapter)["state"] == "failed"
+
+
+def test_the_log_keeps_the_last_40_lines(adapter, skills):
+    skills.client = TaskClientStub([f"line {n}" for n in range(50)], 1)
+    adapter.task("start", START)
+    skills.client.exited.set()
+    assert settled(adapter)["log"] == [f"line {n}" for n in range(10, 50)]
+
+
+def test_task_start_is_refused_outside_ros_mode(adapter, skills, units):
+    units.states.update(ROS_OFF)
+    outcome = adapter.task("start", START)
+    assert not outcome.ok and outcome.detail == {"code": "not_ros"}
+    assert skills.calls == []
+
+
+def test_task_start_is_refused_while_fm_skills_is_down(adapter, skills):
+    skills.running = False
+    outcome = adapter.task("start", START)
+    assert not outcome.ok and outcome.detail == {"code": "skills_down"}
+    assert all(call[1] == "inspect" for call in skills.calls)
+
+
+def test_a_second_task_start_is_refused_while_one_runs(adapter, skills):
+    adapter.task("start", START)
+    outcome = adapter.task("start", START)
+    assert not outcome.ok and outcome.detail == {"code": "busy"}
+    skills.client.exited.set()
+
+
+def test_task_status_and_stop_with_no_run(adapter):
+    assert adapter.task("status").detail == {"run": None}
+    stopped = adapter.task("stop")
+    assert stopped.ok and stopped.message == "no task running" and stopped.detail == {"run": None}
+
+
+def test_task_stop_interrupts_the_client_and_the_run_reads_stopped(adapter, skills):
+    skills.client = TaskClientStub(["planning"], 0)
+    adapter.task("start", START)
+    outcome = adapter.task("stop")
+    assert outcome.ok and outcome.message == "pick_place stopping"
+    assert skills.calls[-1] == [DOCKER, "exec", "fm-skills", "pkill", "-INT", "-x", "task_client"]
+    assert settled(adapter)["state"] == "stopped"
+
+
+def test_stop_ends_a_running_task_before_it_leaves_ros_mode(adapter, skills, units):
+    adapter.task("start", START)
+    assert adapter.stop().ok
+    assert skills.graph_up_at_interrupt is True
+    assert units.states[ROS_UNIT] == "inactive"
+    assert settled(adapter)["state"] == "stopped"
+
+
+def test_down_ends_a_running_task_before_it_leaves_ros_mode(adapter, skills, units):
+    adapter.task("start", START)
+    assert adapter.down().ok
+    assert skills.graph_up_at_interrupt is True
+    assert units.states[ROS_UNIT] == "inactive"
+    assert settled(adapter)["state"] == "stopped"
+
+
+@pytest.mark.parametrize("failure", [subprocess.TimeoutExpired("pkill", 5), OSError("no docker"), 2])
+@pytest.mark.parametrize("verb", ["stop", "down"])
+def test_a_failed_task_stop_still_leaves_ros_mode_and_logs(adapter, skills, units, capsys, failure, verb):
+    adapter.task("start", START)
+    skills.pkill_fails = failure
+    assert getattr(adapter, verb)().ok
+    assert units.states[ROS_UNIT] == "inactive"
+    assert "task did not end before mode ros stopped" in capsys.readouterr().err
+    skills.client.exited.set()
+
+
+def test_a_client_that_outlasts_the_wait_does_not_hold_the_halt(adapter, skills, units, capsys, monkeypatch):
+    monkeypatch.setattr(axol_task, "TASK_STOP_WAIT_S", 0.05)
+    skills.client_ignores_interrupt = True
+    adapter.task("start", START)
+    assert adapter.stop().ok
+    assert units.states[ROS_UNIT] == "inactive"
+    assert "task did not end" in capsys.readouterr().err
+    skills.client.returncode = 130
+    skills.client.exited.set()
+    assert settled(adapter)["state"] == "stopped"
+
+
+def test_a_task_stop_whose_signal_fails_says_so(adapter, skills):
+    adapter.task("start", START)
+    skills.pkill_fails = 2
+    with pytest.raises(AdapterError, match="exit 2"):
+        adapter.task("stop")
+    skills.client.exited.set()
+
+
+def test_a_docker_that_cannot_exec_refuses_the_start_and_leaves_no_run(adapter, skills):
+    skills.popen_fails = True
+    with pytest.raises(AdapterError, match="could not start"):
+        adapter.task("start", START)
+    assert adapter.task("status").detail == {"run": None}
+
+
+def test_undecodable_output_is_replaced_and_a_dead_reader_still_settles_the_run(adapter, skills):
+    """A reader that dies must not leave every later start refused as busy."""
+    def broken_stdout():
+        yield "planning\n"
+        raise UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte")
+
+    skills.client.stdout = broken_stdout()
+    adapter.task("start", START)
+    assert skills.popen_kwargs["errors"] == "replace"
+    run = settled(adapter)
+    assert run["state"] == "failed" and run["log"] == ["planning"]
+    skills.client = TaskClientStub([], 0)
+    assert adapter.task("start", START).ok
+
+
+def test_a_runaway_line_is_cut_before_it_is_kept(adapter, skills):
+    skills.client = TaskClientStub(["x" * 2000 + " result placed (code 0)"], 0)
+    adapter.task("start", START)
+    skills.client.exited.set()
+    run = settled(adapter)
+    assert run["log"] == ["x" * axol_task.TASK_LINE_MAX_CHARS] and run["result"] == ""
+    assert run["state"] == "failed"

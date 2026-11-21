@@ -368,3 +368,39 @@ def test_unit_names_the_unit_an_action_acts_on():
     assert client.build_payload("unit", args(value="restart", assignment="fm-axol-zed")) == {
         "action": "restart", "unit": "fm-axol-zed",
     }
+
+
+# --- task --------------------------------------------------------------------
+
+
+def task_args(**overrides) -> argparse.Namespace:
+    return args(**{"object": "", "pack": "", **overrides})
+
+
+def test_task_defaults_to_status():
+    assert client.build_payload("task", task_args()) == {"action": "status"}
+
+
+def test_task_start_carries_only_the_flags_given():
+    assert client.build_payload("task", task_args(value="start", task="pick_place")) == {
+        "action": "start", "task": "pick_place"}
+    assert client.build_payload("task", task_args(value="start", task="pick_place", object="can",
+                                                  pack="axol_cans")) == {
+        "action": "start", "task": "pick_place", "object": "can", "pack": "axol_cans"}
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["fm-rob-02", "task", "pause"],                          # an action task does not have
+        ["fm-rob-02", "task", "start"],                          # start without a task
+        ["fm-rob-02", "task", "start", "--object", "can"],
+        ["fm-rob-02", "task", "stop", "--task", "pick_place"],   # a start flag on a stop
+        ["fm-rob-02", "task", "--pack", "axol_cans"],            # a start flag on the default status
+        ["fm-rob-02", "task", "list", "--object", "can"],
+    ],
+)
+def test_incomplete_task_invocations_are_refused_before_any_session_opens(argv):
+    with pytest.raises(SystemExit) as exit_info:
+        client.main(argv)
+    assert exit_info.value.code == client.EX_USAGE

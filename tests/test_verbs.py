@@ -456,3 +456,69 @@ def test_perception_debug_refuses_anything_but_one_boolean(robot, payload):
 
 def test_perception_debug_is_not_answered_for_a_wildcard():
     assert verb_of(key("perception_debug", "*"), NS) is None
+
+
+# --- task --------------------------------------------------------------------
+
+
+@pytest.fixture
+def task_calls(robot, monkeypatch) -> list:
+    """Every task call that reaches the adapter, answered as a run."""
+    seen = []
+    monkeypatch.setattr(robot, "task", lambda action, options=None: seen.append((action, options))
+                        or Outcome(ok=True, detail={"run": None}))
+    return seen
+
+
+def test_task_routes_and_never_answers_a_wildcard():
+    assert verb_of(key("task"), NS) == "task"
+    assert verb_of(f"{KEY_PREFIX}/*/task", NS) is None
+
+
+def test_task_defaults_to_status(robot, task_calls):
+    assert body(ask(robot, "task", payload={}))["run"] is None
+    assert task_calls == [("status", None)]
+
+
+def test_task_start_passes_only_validated_strings(robot, task_calls):
+    ask(robot, "task", payload={"action": "start", "task": "pick_place", "object": "can", "pack": "axol_cans"})
+    ask(robot, "task", payload={"action": "start", "task": "pick_place"})
+    ask(robot, "task", payload={"action": "list"})
+    ask(robot, "task", payload={"action": "stop"})
+    assert task_calls == [
+        ("start", {"task": "pick_place", "object": "can", "pack": "axol_cans"}),
+        ("start", {"task": "pick_place"}),
+        ("list", None),
+        ("stop", None),
+    ]
+
+
+@pytest.mark.parametrize("task", [None, "pick", "PICK_PLACE", 3])
+def test_task_start_refuses_an_unlisted_task_with_its_code(robot, task_calls, task):
+    reply = body(ask(robot, "task", payload={"action": "start", "task": task}))
+    assert reply["ok"] is False and reply["code"] == "unknown_task"
+    assert task_calls == []
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"action": "pause"},
+        {"action": "start", "task": "pick_place", "object": "../etc"},
+        {"action": "start", "task": "pick_place", "object": "can; reboot"},
+        {"action": "start", "task": "pick_place", "pack": "p" * 33},
+        {"action": "start", "task": "pick_place", "pack": 7},
+        {"action": "start", "task": "pick_place", "object": ""},
+        {"action": "stop", "task": "pick_place"},                     # a start field on a stop
+        {"action": "list", "object": "can"},
+        {"pack": "axol_cans"},                                         # defaults to status
+    ],
+)
+def test_task_refuses_a_malformed_request(robot, task_calls, payload):
+    assert ask(robot, "task", payload=payload).ok is False
+    assert task_calls == []
+
+
+def test_a_robot_with_no_tasks_answers_unsupported(robot):
+    reply = body(ask(robot, "task", payload={"action": "list"}))
+    assert reply["ok"] is False and reply["code"] == "unsupported"

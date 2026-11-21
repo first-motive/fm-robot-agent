@@ -275,3 +275,9 @@ def test_the_stack_command_is_an_argv_not_a_shell_line(tmp_path):
 
 def test_there_is_no_perception_node(adapter):
     assert not adapter.perception_debug(True).ok
+
+
+def test_there_are_no_tasks(adapter):
+    for action in ("list", "status"):
+        outcome = adapter.task(action)
+        assert not outcome.ok and outcome.detail == {"code": "unsupported"}

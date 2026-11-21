@@ -32,6 +32,10 @@ episode queryable uses, for the same reason: the suite runs with no router.
                                        "unit": "fm-..."}
                                       this host's fm-* systemd units and its camera
                                       daemons (see units.py)
+    fm/robot/<ns>/task        write   {"action": "list"|"start"|"stop"|"status", "task": "pick_place",
+                                       "object": "...", "pack": "..."}
+                                      one supervised task the robot's own skill stack runs,
+                                      which moves the arm; the Axol, in mode ros, only
 
 Read and write verbs are both queries. Zenoh's put/subscribe pair delivers no
 reply, and every verb here has an answer the caller must see — a refused mode, a
@@ -52,6 +56,7 @@ from fm_robot_agent.calibration import CalibrationStore
 from fm_robot_agent.description import DescriptionBundle
 from fm_robot_agent.protocol import (
     SCHEMA_VERSION,
+    TASKS,
     AdapterError,
     GuardsUnitChanges,
     Outcome,
@@ -68,7 +73,7 @@ READ_VERBS = ("status", "episodes")
 #: robot's URDF or meshes in one query, which no discovery needs.
 NAMED_READS = ("description", "asset")
 WRITE_VERBS = ("up", "down", "config", "mode", "record", "stop", "session", "collect", "calibration", "pose",
-               "perception_debug", "unit")
+               "perception_debug", "unit", "task")
 
 #: What `calibration` can be asked to do. `get` sits with the writes for the
 #: reason config's does: a discovery wildcard has no business reading it.
@@ -91,6 +96,13 @@ COLLECT_ACTIONS = ("start", "stop", "status")
 #: Fields only a start carries. Sent with a stop or a status they mean the caller
 #: expected something this action will not do, so they are refused, not dropped.
 COLLECT_START_FIELDS = ("object", "hours", "cycles", "speed", "no_record")
+
+#: What `task` can be asked to do. `status` is the default, as it is for `collect`.
+TASK_ACTIONS = ("list", "start", "stop", "status")
+
+#: Fields only a task start carries, refused elsewhere for the reason
+#: COLLECT_START_FIELDS are.
+TASK_START_FIELDS = ("task", "object", "pack")
 
 #: An object is a file name under the loop's `config/objects/`, matched against
 #: the pattern the robot-side script enforces, so the two refuse the same names.
@@ -323,6 +335,38 @@ def _collect(key: str, adapter: RobotAdapter, body: dict) -> Reply:
     return _outcome(key, adapter.collect(action, options))
 
 
+def _task(key: str, adapter: RobotAdapter, body: dict) -> Reply:
+    """List, start, stop, or report one supervised task.
+
+    The caller names a task and, for a start, an object and a pack, nothing
+    more: what the task does is the robot's skill stack, so this verb is no
+    exception to the fabric sending no motion command. Object and pack are held
+    to the pattern collect's object is, because both reach a shell on the robot.
+    """
+    action = body.get("action") or "status"
+    if action not in TASK_ACTIONS:
+        return _refuse(key, f"action must be one of {TASK_ACTIONS}")
+    if action != "start":
+        if any(name in body for name in TASK_START_FIELDS):
+            return _refuse(key, f"{', '.join(TASK_START_FIELDS)} belong to a start")
+        return _outcome(key, adapter.task(action))
+
+    name = body.get("task")
+    names = [task["name"] for task in TASKS]
+    if name not in names:
+        return _outcome(key, Outcome(ok=False, message=f"start needs a task: one of {', '.join(names)}",
+                                     detail={"code": "unknown_task"}))
+    options = {"task": name}
+    for field in ("object", "pack"):
+        value = body.get(field)
+        if value is None:
+            continue
+        if not isinstance(value, str) or len(value) > OBJECT_MAX_LEN or not OBJECT_PATTERN.fullmatch(value):
+            return _refuse(key, f"{field} must be a name of at most {OBJECT_MAX_LEN} characters")
+        options[field] = value
+    return _outcome(key, adapter.task(action, options))
+
+
 def _pose(key: str, adapter: RobotAdapter, body: dict) -> Reply:
     """List, plan, or drive the robot's named calibration poses.
 
@@ -496,6 +540,9 @@ def answer(
             return _collect(key, adapter, body)
         if verb == "pose":
             return _pose(key, adapter, body)
+
+        if verb == "task":
+            return _task(key, adapter, body)
 
         if verb == "perception_debug":
             return _perception_debug(key, adapter, body)
