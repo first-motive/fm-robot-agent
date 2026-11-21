@@ -202,6 +202,28 @@ ROS_CHECK_INTERVAL_S = 1.0
 
 REQUEST_TIMEOUT_S = 10.0
 
+#: How long a mode start waits for Almond's idle link to report a fresh motor
+#: survey after the agent connected it. Almond refuses any motor operation
+#: without a connected survey under 3 s old (``_ROBOT_SURVEY_MAX_AGE_S`` in its
+#: ``serve/app.py``), and a robot just powered on has no link at all, so a mode
+#: sent straight after power-on answered 409 until someone pressed Connect in
+#: Almond's own UI.
+#:
+#: The wait runs under the bus lock, so a ``stop`` sent meanwhile queues behind
+#: it; the bound is kept short for that reason. Releasing the lock instead would
+#: let the start run after the stop it raced. A survey that is not fresh in time
+#: is not refused here: Almond's own refusal says why.
+#:
+#: ``lastPing`` is epoch seconds: Almond's link sets it from ``time.time()``.
+LINK_SURVEY_TIMEOUT_S = 4.0
+LINK_SURVEY_POLL_S = 0.25
+LINK_SURVEY_MAX_AGE_S = 3.0
+
+#: Bounds on the refusal text forwarded from Almond: a reason is one sentence,
+#: and the body is read whole only up to this many bytes.
+ALMOND_ERROR_MAX_BYTES = 65536
+ALMOND_ERROR_MAX_CHARS = 500
+
 #: The words the fleet reads as up, for ``hardware`` and for each service. The
 #: SO-101 and the Anvil already send them, and the desktop passes a stack only
 #: when ``hardware`` is one of them and every listed service is too.
@@ -425,7 +447,7 @@ class AxolAdapter:
                     message=f"mode {config} needs {', '.join(missing)}",
                 )
         self._stop_operation()
-        started = self._post("/api/op/start", {"op": operation, "args": supplied})
+        started = self._start_operation(operation, supplied)
         return Outcome(
             ok=True,
             message=f"mode {config}",
@@ -614,10 +636,7 @@ class AxolAdapter:
             refusal = self._ros_refusal("recording")
             if refusal is not None:
                 return refusal
-            started = self._post(
-                "/api/op/start",
-                {"op": RECORD_OPERATION, "args": {"repo_id": self._repo_id(dataset)}},
-            )
+            started = self._start_operation(RECORD_OPERATION, {"repo_id": self._repo_id(dataset)})
             return Outcome(
                 ok=True,
                 message=f"recording into {dataset}",
@@ -847,6 +866,35 @@ class AxolAdapter:
         except AdapterError:
             return {}
 
+    def _start_operation(self, operation: str, args: dict) -> dict:
+        """Start an Almond operation, connecting its idle link first when it is down."""
+        self._connect_link_for_survey()
+        return self._post("/api/op/start", {"op": operation, "args": args})
+
+    def _connect_link_for_survey(self) -> None:
+        """Connect Almond's idle link if it is down, then wait for a fresh survey.
+
+        The idle link only pings the motors; it energises none, so connecting it
+        is what Almond's own Connect button does. A link already up is left as it
+        is, and one still connecting is waited on rather than connected twice. A link that will not connect, or a survey that never turns fresh, is
+        not refused here: the start goes ahead and Almond's own refusal, which
+        names the reason, reaches the caller.
+        """
+        state = self._get("/api/robot/status").get("state")
+        if state in ALMOND_LINK_UP:
+            return
+        if state not in ALMOND_HOLDS_BUSES:
+            try:
+                self._post("/api/robot/connect", {})
+            except AdapterError:
+                return
+        deadline = time.monotonic() + LINK_SURVEY_TIMEOUT_S
+        while time.monotonic() < deadline:
+            robot = self._get("/api/robot/status")
+            if robot.get("state") in ALMOND_LINK_UP and _fresh(robot.get("lastPing")):
+                return
+            time.sleep(LINK_SURVEY_POLL_S)
+
     def _get(self, path: str) -> dict:
         return self._request(path, None)
 
@@ -869,7 +917,8 @@ class AxolAdapter:
             ) as response:
                 decoded = json.loads(response.read() or b"{}")
         except urllib.error.HTTPError as exc:
-            raise AdapterError(f"{path} refused: {exc.code} {exc.reason}") from exc
+            reason = _almond_error(exc) or f"{exc.code} {exc.reason}"
+            raise AdapterError(f"{path} refused: {reason}") from exc
         except (urllib.error.URLError, OSError, json.JSONDecodeError) as exc:
             raise AdapterError(f"the Axol server at {self.base_url} did not answer: {exc}") from exc
         return decoded if isinstance(decoded, dict) else {}
@@ -881,6 +930,28 @@ class AxolAdapter:
             if operation == operation_id:
                 return mode
         return None
+
+
+def _fresh(last_ping: object) -> bool:
+    """Whether Almond's survey timestamp is recent enough for it to allow motion."""
+    if isinstance(last_ping, bool) or not isinstance(last_ping, (int, float)):
+        return False
+    return 0 <= time.time() - float(last_ping) <= LINK_SURVEY_MAX_AGE_S
+
+
+def _almond_error(exc: urllib.error.HTTPError) -> str:
+    """The ``error`` text Almond puts in a refusal's body, or empty when it sent none.
+
+    Almond explains every 409 in that field ("Connect the Axol robot link
+    before starting motor motion."); the status line alone says only
+    "409 Conflict", which is all the desktop showed.
+    """
+    try:
+        body = json.loads(exc.read(ALMOND_ERROR_MAX_BYTES) or b"{}")
+    except (OSError, ValueError, AttributeError, TypeError):
+        return ""
+    error = body.get("error") if isinstance(body, dict) else None
+    return error[:ALMOND_ERROR_MAX_CHARS] if isinstance(error, str) else ""
 
 
 def _halted(ros_failure: str | None, message: str, answered: dict) -> Outcome:

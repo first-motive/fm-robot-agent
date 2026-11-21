@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import subprocess
 import threading
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -19,7 +20,9 @@ from fm_robot_agent.axol import (
     ROS_CHECK_INTERVAL_S,
     ROS_MODE,
     AxolAdapter,
+    _almond_error,
     _frame_to_joint_state,
+    _fresh,
     _stack_words,
 )
 from fm_robot_agent.axol_ros import CAMERA_UNIT, CORE_UNIT, ROS_UNIT, SUDOERS_RULE
@@ -40,6 +43,8 @@ class ServerStub:
         self.state = "connected"
         self.refuse: set[str] = set()
         self.motors: dict | list | None = {"left:SHOULDER_1": {"reachable": True}}
+        # None answers a fresh survey on every read; a number pins it.
+        self.last_ping: float | None = None
 
     exited_session: dict | None = None
 
@@ -48,7 +53,8 @@ class ServerStub:
         if path in self.refuse:
             raise urllib.error.HTTPError(path, 409, "Conflict", None, None)
         if path == "/api/robot/status":
-            return {"state": self.state, "motors": self.motors}
+            last_ping = time.time() if self.last_ping is None else self.last_ping
+            return {"state": self.state, "motors": self.motors, "lastPing": last_ping}
         if path == "/api/op/status":
             if self.running_op is not None:
                 return {"running": True, "session": {"id": "s1", "command": self.running_op}}
@@ -1230,3 +1236,123 @@ def test_a_bus_check_and_its_action_run_under_one_lock(adapter, units, monkeypat
     starter.join(5)
     racer.join(5)
     assert results[0].ok is False and "mode ros is on" in results[0].message
+
+
+# --- a mode started on a robot just powered on --------------------------------
+
+
+def test_a_mode_connects_a_disconnected_link_before_starting(adapter, server):
+    """Almond refuses a motor operation without a connected survey: 409, every time after power-on."""
+    server.state = "disconnected"
+    outcome = adapter.set_mode("gravity-comp")
+    assert outcome.ok
+    paths = server.paths()
+    assert paths.index("/api/robot/connect") < paths.index("/api/op/start")
+
+
+def test_recording_connects_a_disconnected_link_before_starting(adapter, server):
+    server.state = "disconnected"
+    adapter.record("pick-place", "start")
+    paths = server.paths()
+    assert paths.index("/api/robot/connect") < paths.index("/api/op/start")
+
+
+def test_a_mode_leaves_a_connected_link_alone(adapter, server):
+    adapter.set_mode("gravity-comp")
+    assert "/api/robot/connect" not in server.paths()
+
+
+def test_a_refusal_carries_almonds_own_reason(adapter, server, monkeypatch):
+    """The status line says only 409 Conflict; the reason is in the body's `error`."""
+    import io
+
+    reason = "Connect the Axol robot link before starting motor motion."
+    real_handle = server.handle
+
+    def handle(method, path, payload):
+        if path == "/api/op/start":
+            body = io.BytesIO(json.dumps({"error": reason}).encode())
+            raise urllib.error.HTTPError(path, 409, "Conflict", None, body)
+        return real_handle(method, path, payload)
+
+    monkeypatch.setattr(server, "handle", handle)
+    with pytest.raises(AdapterError, match="before starting motor motion"):
+        adapter.set_mode("gravity-comp")
+
+
+@pytest.fixture
+def no_wait(monkeypatch):
+    """A survey wait that ends at once instead of sleeping out its bound."""
+    from fm_robot_agent import axol
+
+    monkeypatch.setattr(axol, "LINK_SURVEY_TIMEOUT_S", 0.05)
+    monkeypatch.setattr(axol, "LINK_SURVEY_POLL_S", 0.0)
+
+
+def test_a_link_that_will_not_connect_still_sends_the_start(adapter, server):
+    """Almond's refusal of the start names the reason; the agent's guess would not."""
+    server.state = "disconnected"
+    server.refuse.add("/api/robot/connect")
+    adapter.set_mode("gravity-comp")
+    assert "/api/op/start" in server.paths()
+
+
+def test_a_survey_that_never_turns_fresh_still_sends_the_start(adapter, server, no_wait):
+    server.state = "disconnected"
+    server.last_ping = 0.0
+    adapter.set_mode("gravity-comp")
+    assert "/api/op/start" in server.paths()
+
+
+def test_the_start_waits_for_a_survey_that_turns_fresh(adapter, server, monkeypatch):
+    server.state = "disconnected"
+    server.last_ping = 0.0
+    polls = []
+
+    def sleep(_seconds):
+        polls.append(1)
+        if len(polls) == 3:
+            server.last_ping = None
+
+    monkeypatch.setattr(time, "sleep", sleep)
+    adapter.set_mode("gravity-comp")
+    assert len(polls) == 3
+    assert "/api/op/start" in server.paths()
+
+
+def test_a_connecting_link_is_waited_on_not_connected_again(adapter, server, no_wait):
+    server.state = "connecting"
+    adapter.set_mode("gravity-comp")
+    assert "/api/robot/connect" not in server.paths()
+    assert server.paths().count("/api/robot/status") >= 2
+
+
+@pytest.mark.parametrize(
+    ("age", "fresh"),
+    [(0.0, True), (2.9, True), (3.5, False), (-5.0, False)],
+)
+def test_a_survey_is_fresh_only_inside_almonds_window(age, fresh):
+    assert _fresh(time.time() - age) is fresh
+
+
+@pytest.mark.parametrize("last_ping", [None, True, "1700000000", [1.0]])
+def test_a_survey_timestamp_that_is_not_a_number_is_never_fresh(last_ping):
+    assert _fresh(last_ping) is False
+
+
+@pytest.mark.parametrize(
+    ("body", "reason"),
+    [
+        (b'{"error": "busy"}', "busy"),
+        (b"not json", ""),
+        (b'["error"]', ""),
+        (b'{"detail": "x"}', ""),
+        (b'{"error": 409}', ""),
+        (None, ""),
+    ],
+)
+def test_almonds_reason_is_read_only_from_a_string_error_field(body, reason):
+    import io
+
+    fp = io.BytesIO(body) if body is not None else None
+    assert _almond_error(urllib.error.HTTPError("/x", 409, "Conflict", None, fp)) == reason
