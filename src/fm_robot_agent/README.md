@@ -83,6 +83,7 @@ robot.
 | `anvil.py` | the Anvil workcell: compose, the webapp's tRPC lane, ros2 services, the collection loop's script |
 | `trpc.py` | the webapp's tRPC-over-WebSocket protocol, the two call shapes |
 | `axol.py` | the Almond Axol: its HTTPS server, and its telemetry as JointState |
+| `axol_task.py` | the Axol's `task` runs: fm-skills' task client, started, followed and stopped in its container |
 | `axol_ros.py` | the Axol's `ros` mode: fm-axol's two systemd units, started and stopped in order |
 | `units.py` | the `unit` verb: this host's fm-* units and camera daemons, allowlisted, started and watched to settle |
 | `cdr.py` | CDR encoding, so an Axol reaches the fabric looking like a ROS rig |

@@ -34,7 +34,7 @@ from pathlib import Path
 from fm_robot_agent.axol import lerobot_v3_episodes
 from fm_robot_agent.cdr import joint_state
 from fm_robot_agent.config import MODE, MODE_ALIAS, Setting
-from fm_robot_agent.protocol import AdapterError, Outcome
+from fm_robot_agent.protocol import TASK_UNSUPPORTED, AdapterError, Outcome
 
 KIND = "so101"
 MODES = ("idle", "teleop")
@@ -221,6 +221,9 @@ class So101Adapter:
 
     def perception_debug(self, enabled: bool) -> Outcome:
         return Outcome(ok=False, message="the SO-101 runs no perception node")
+
+    def task(self, action: str, options: dict[str, str] | None = None) -> Outcome:
+        return Outcome(ok=False, message="the SO-101 runs no tasks", detail={"code": TASK_UNSUPPORTED})
 
     def record(self, dataset: str, action: str, task: str = "", note: str = "", episode: str = "") -> Outcome:
         if note or episode:

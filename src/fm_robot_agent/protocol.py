@@ -13,7 +13,7 @@ from the fabric, and ``stop`` maps to the vendor's own pause or disconnect rathe
 than to anything this repo invents. The fabric never sends a pose, trajectory
 or command topic. It can start and stop supervised behaviours that move the
 arm: ``collect`` on the Anvil, only once armed locally, and the Axol's
-``run-policy``.
+``run-policy`` and ``task``.
 """
 
 from __future__ import annotations
@@ -51,6 +51,13 @@ SET_BOOL_SUCCESS = re.compile(r"success=(True|False)")
 
 #: What coreutils `timeout` exits with when it stopped the command.
 TIMEOUT_EXIT = 124
+
+#: Every supervised task the ``task`` verb can start, as ``list`` reports it.
+#: One today; the router refuses any other name before an adapter sees it.
+TASKS = ({"name": "pick_place", "title": "Pick and place", "fields": ("object", "pack")},)
+
+#: The ``code`` a robot kind with no tasks refuses every ``task`` action with.
+TASK_UNSUPPORTED = "unsupported"
 
 
 class AdapterError(Exception):
@@ -218,6 +225,23 @@ class RobotAdapter(Protocol):
         is why the node turns them off :data:`PERCEPTION_DEBUG_LEASE_S` after
         the last true. ``detail`` carries ``enabled`` and ``lease_s``. Refused when the
         stack is down, and by a robot with no perception node.
+        """
+
+    def task(self, action: str, options: dict[str, str] | None = None) -> Outcome:
+        """List, start, stop, or report one supervised task (see :data:`TASKS`).
+
+        ``action`` is ``list``, ``start``, ``stop`` or ``status``; the router
+        validates it and the start ``options`` before calling. ``options``
+        carries ``task`` always, and ``object`` and ``pack`` when the caller set
+        them, every value as a string. A task name not in :data:`TASKS` is
+        refused ``unknown_task`` by the router before any adapter runs.
+
+        A task moves the arm under the robot's own skill stack, never under a
+        command from the fabric. ``detail["tasks"]`` answers ``list``;
+        ``detail["run"]`` is the run a start began, a stop is ending, or a
+        status reports (the last finished one when none runs, else ``None``).
+        ``detail["code"]`` is the reason a refusal carries. A robot with no
+        tasks refuses every action with :data:`TASK_UNSUPPORTED`.
         """
 
     def stop(self) -> Outcome:

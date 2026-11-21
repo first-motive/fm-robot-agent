@@ -7,8 +7,10 @@ a certificate it signed itself, which is checked for every host except loopback:
 the agent runs on the same machine, so that connection never leaves it, and no
 authority issues a certificate for ``localhost``. This adapter is a client of
 that server and nothing more: it imports no Almond SDK, touches no CAN interface,
-and starts no process the server does not already manage. A stock Axol install
-keeps working with the agent installed beside it.
+and starts no process the server does not already manage, with one exception:
+a ``task`` run, fm-skills' task client, started in fm-skills' container while
+``ros`` mode holds the buses (see :mod:`fm_robot_agent.axol_task`). A stock Axol
+install keeps working with the agent installed beside it.
 
 Two things need saying about the mapping:
 
@@ -57,6 +59,7 @@ from fm_robot_agent.axol_ros import (
     RosStack,
     holds_buses,
 )
+from fm_robot_agent.axol_task import TaskRunner
 from fm_robot_agent.cdr import joint_state
 from fm_robot_agent.config import (
     MODE,
@@ -74,6 +77,7 @@ from fm_robot_agent.protocol import (
     PERCEPTION_DEBUG_TIMEOUT_S,
     PERCEPTION_DEBUG_TYPE,
     SET_BOOL_SUCCESS,
+    TASKS,
     TIMEOUT_EXIT,
     AdapterError,
     Outcome,
@@ -346,6 +350,7 @@ class AxolAdapter:
         # in flight rather than racing it.
         self._bus_lock = threading.RLock()
         self._perception_lock = threading.Lock()
+        self.tasks = TaskRunner(self.ros)
 
     # --- the verb set --------------------------------------------------------
 
@@ -616,6 +621,22 @@ class AxolAdapter:
         return Outcome(ok=True, message=f"perception debug {'on' if enabled else 'off'}",
                        detail={"enabled": enabled, "lease_s": PERCEPTION_DEBUG_LEASE_S})
 
+    def task(self, action: str, options: dict[str, str] | None = None) -> Outcome:
+        """Run fm-skills' task client, which drives the arms through fm-axol's graph (see `axol_task`).
+
+        A start and a stop run under the bus lock, so a stop during a start's
+        launch still sees the run, and `stop` cannot leave ``ros`` between a
+        start's check and its launch.
+        """
+        if action == "list":
+            return Outcome(ok=True, detail={"tasks": list(TASKS)})
+        if action == "status":
+            return self.tasks.status()
+        with self._bus_lock:
+            if action == "start":
+                return self.tasks.start(options or {})
+            return self.tasks.stop()
+
     @_holding_bus_lock
     def record(self, dataset: str, action: str, task: str = "", note: str = "", episode: str = "") -> Outcome:
         """Start or stop `collect-data`, which takes a dataset and nothing else.
@@ -846,13 +867,16 @@ class AxolAdapter:
         return None
 
     def _leave_ros(self) -> str | None:
-        """Stop the ROS stack if any of it runs. ``None`` on success, else the reason.
+        """Stop a running task, then the ROS stack if any of it runs. ``None`` on success, else the reason.
 
         Only when it runs: a stock Axol has no fm-axol units, and stopping a unit
         that is not loaded fails, which would turn every ``stop`` into an error.
         A camera unit still up after its core died counts as running, so leaving
         the mode always hands the cameras back to Almond.
         """
+        # Under the bus lock `stop` and `down` hold: a task cancels its goal
+        # through this graph, so it ends first, at worst a 5 s signal plus a 2 s wait.
+        self.tasks.end()
         if self.ros.idle():
             return None
         return self.ros.stop()

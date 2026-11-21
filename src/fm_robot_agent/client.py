@@ -22,6 +22,10 @@ and the reply into either a line a person reads or the JSON a script does.
     fm robot fm-rob-01 pose go board-1                       move both arms there (armed on the robot first)
     fm robot fm-rob-01 pose home                             back home, arms handed back
     fm robot fm-rob-01 perception_debug on                   debug frames for 60 s; off ends them
+    fm robot fm-rob-02 task list                             the tasks this robot runs
+    fm robot fm-rob-02 task start --task pick_place --object can   (the Axol, in mode ros)
+    fm robot fm-rob-02 task status                           the run, or the last one to finish
+    fm robot fm-rob-02 task stop
     fm robot list
 
 ``list`` is a wildcard query over ``fm/robot/*/status``: the fabric is the
@@ -47,6 +51,7 @@ from fm_robot_agent.verbs import (
     KEY_PREFIX,
     READ_VERBS,
     SESSION_ACTIONS,
+    TASK_ACTIONS,
     VERBS,
 )
 
@@ -156,6 +161,12 @@ def build_payload(verb: str, args: argparse.Namespace) -> dict | None:
         return body
     if verb == "perception_debug":
         return {"enabled": PERCEPTION_DEBUG_VALUES[args.value]}
+    if verb == "task":
+        body = {"action": args.value or "status"}
+        for name in ("task", "object", "pack"):
+            if getattr(args, name, ""):
+                body[name] = getattr(args, name)
+        return body
     if verb == "collect":
         body = {"action": args.value or "status"}
         for name in ("object", "hours", "cycles", "speed"):
@@ -279,7 +290,7 @@ def main(argv: list[str] | None = None) -> int:
         nargs="?",
         help=f"mode: the config; record: start | stop; config: {' | '.join(CONFIG_ACTIONS)}; "
         f"session: {' | '.join(SESSION_ACTIONS)}; collect: {' | '.join(COLLECT_ACTIONS)}; "
-        "pose: list | plan NAME | go NAME | home; perception_debug: on | off; "
+        f"task: {' | '.join(TASK_ACTIONS)}; pose: list | plan NAME | go NAME | home; perception_debug: on | off; "
         "unit: list | status UNIT | start UNIT | stop UNIT | restart UNIT",
     )
     parser.add_argument("assignment", nargs="?", help="config set: KEY=VALUE; pose plan or go: the pose name; unit: the unit name")
@@ -295,13 +306,14 @@ def main(argv: list[str] | None = None) -> int:
         "--task",
         default="",
         help="record: the instruction the episode demonstrates, written into the dataset "
-        "(refused by a robot whose recorder has no field for one)",
+        "(refused by a robot whose recorder has no field for one); task start: the task to run",
     )
     parser.add_argument("--note", default="", help="record stop: a short note for the recorder")
     parser.add_argument(
         "--episode", default="", help="record stop: the episode ID you mean to stop; another take refuses"
     )
-    parser.add_argument("--object", default="", help="collect start: the object to collect with (config/objects name)")
+    parser.add_argument("--object", default="", help="collect or task start: the object to collect with or pick")
+    parser.add_argument("--pack", default="", help="task start: the object pack the task loads")
     parser.add_argument("--hours", type=float, help="collect start: stop the loop after this many hours (0.01 to 12)")
     parser.add_argument("--cycles", type=int, help="collect start: stop the loop after this many cycles")
     parser.add_argument("--speed", type=float, help="collect start: the arm's speed scale (0.1 to 3.0; the loop defaults to 2.5)")
@@ -342,6 +354,15 @@ def main(argv: list[str] | None = None) -> int:
             parser.error("collect start needs --object")
         if action != "start" and start_flags:
             parser.error("--object, --hours, --cycles, --speed and --no-record belong to collect start")
+
+    if not listing and args.verb == "task":
+        action = args.value or "status"
+        if action not in TASK_ACTIONS:
+            parser.error(f"task takes one of: {', '.join(TASK_ACTIONS)}")
+        if action == "start" and not args.task:
+            parser.error("task start needs --task; list them with `task list`")
+        if action != "start" and (args.task or args.object or args.pack):
+            parser.error("--task, --object and --pack belong to task start")
 
     try:
         session = open_session()

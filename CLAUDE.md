@@ -16,7 +16,7 @@ other port.
 - Python tooling goes through `uv` — never bare `pip`, `python`, or `poetry`.
 - The fabric never sends a pose, trajectory or command topic. It can start and
   stop supervised behaviours that move the arm — `collect` on the Anvil (only
-  once armed locally) and the Axol's `run-policy`. Inbound is the fixed verb
+  once armed locally) and the Axol's `run-policy` and `task`. Inbound is the fixed verb
   set only.
 
 ## Testing

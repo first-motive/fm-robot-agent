@@ -12,6 +12,8 @@
 #   fm robot fm-rob-01 collect start --object can --hours 2   needs arming on the robot;
 #                                    --hours 0.01-12, --speed 0.1-3.0, --cycles, --no-record
 #   fm robot fm-rob-01 collect status
+#   fm robot fm-rob-02 task start --task pick_place --object can   the Axol, in mode ros;
+#                                    task list | status | stop
 #   fm robot fm-rob-01 stop
 #   fm robot host fm-rob-03                          host a computer-less robot (SO-101) here
 #   fm robot stage ~/fm/fm-skills                    stage the Anvil's description bundle here
