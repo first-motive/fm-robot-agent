@@ -37,6 +37,17 @@ An unclassified key is never written because `.env.config` is an `env_file` for 
 container that runs `privileged: true`: writing an unknown key there is
 environment injection, not a configuration edit.
 
+The Axol adds one key of fm's own beside Almond's: `lift.height_mm`, the Ox
+cart lift's sticker reading in millimetres (0 fully lowered, 457.2 fully
+raised). It is `motion`, range-checked, and stored in
+`/var/lib/fm-axol/lift/height_mm`, which fm-axol's launch reads when the ROS
+stack starts. A write is refused while that stack is up, since it would leave
+the transforms stale until the next start.
+
+```bash
+fm robot <axol> config set lift.height_mm=310
+```
+
 ## Install
 
 On the robot's own host, once its identity card and fm-comms are in place:
