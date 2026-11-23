@@ -789,6 +789,8 @@ def test_gripper_ranges_tolerate_text_that_is_not_the_file():
     assert gripper_ranges("") == {}
     assert gripper_ranges("{not json") == {}
     assert gripper_ranges("[1, 2]") == {}
+    huge = json.dumps({"left": {"open_pos": 1e308, "close_pos": -1e308}})
+    assert gripper_ranges(huge) == {}, "a stroke that overflows cannot normalise"
 
 
 def test_the_calibration_is_read_as_root_through_the_one_sudo_line(units):
@@ -809,7 +811,21 @@ def test_telemetry_publishes_calibrated_grippers_and_rereads_on_a_link_change(mo
     units.gripper_calibration = json.dumps({"left": {"open_pos": 1.2, "close_pos": 0.2}})
     sent = list(AxolAdapter().telemetry())
     assert b"left:GRIPPER\x00" in sent[0][1]
+    assert units.gripper_reads == 1, "a link change inside the 5 s floor does not reread"
+
+
+def test_a_link_change_rereads_once_the_floor_has_passed(monkeypatch, units):
+    clock = iter([100.0, 106.0])
+    monkeypatch.setattr("fm_robot_agent.axol.time.time", lambda: next(clock))
+    frame = json.dumps({"type": "frame", "t": 1.0, "m": {}})
+    patch_socket(monkeypatch, [frame, json.dumps({"type": "state", "state": "connected"}), frame])
+    list(AxolAdapter().telemetry())
     assert units.gripper_reads == 2
+
+
+def test_a_socket_message_that_is_not_an_object_is_skipped(monkeypatch, units):
+    patch_socket(monkeypatch, ["[1, 2]", "7", json.dumps({"type": "frame", "t": 1.0, "m": {}})])
+    assert len(list(AxolAdapter().telemetry())) == 1
 
 
 class SocketStub:

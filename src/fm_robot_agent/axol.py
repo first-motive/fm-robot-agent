@@ -204,6 +204,9 @@ GRIPPER_READ_TIMEOUT_S = 5.0
 #: message, so the file is reread on each of those. While no range is known it
 #: is retried at most this often: every read is a sudo call, which logs.
 GRIPPER_RETRY_S = 30.0
+#: The floor between reads even across link changes, so a burst of state
+#: messages cannot turn into a burst of sudo calls.
+GRIPPER_MIN_REREAD_S = 5.0
 
 JOINT_FRAME_OFFSETS_DEG = {
     "left:SHOULDER_1": -90.0,
@@ -838,6 +841,7 @@ class AxolAdapter:
         ros_on = False
         grippers: dict[str, tuple[float, float]] = {}
         grippers_read = float("-inf")
+        stale = True
         socket_url = f"{url}/api/telemetry/ws"
         with connect(
             socket_url, open_timeout=REQUEST_TIMEOUT_S, ssl=_ssl_context(socket_url)
@@ -847,15 +851,18 @@ class AxolAdapter:
                     frame = json.loads(message)
                 except (json.JSONDecodeError, TypeError):
                     continue
+                if not isinstance(frame, dict):
+                    continue
                 if frame.get("type") == "state":
                     # A link change may be an enable, and an enable recalibrates.
-                    grippers_read = float("-inf")
+                    stale = True
                     continue
                 if frame.get("type") != "frame":
                     continue
                 now = time.time()
-                if grippers_read == float("-inf") or (not grippers and now - grippers_read >= GRIPPER_RETRY_S):
-                    grippers_read = now
+                since_read = now - grippers_read
+                if since_read >= GRIPPER_MIN_REREAD_S and (stale or (not grippers and since_read >= GRIPPER_RETRY_S)):
+                    grippers_read, stale = now, False
                     grippers = read_gripper_ranges()
                 if now - ros_checked >= ROS_CHECK_INTERVAL_S:
                     ros_checked = now
@@ -1160,7 +1167,8 @@ def gripper_ranges(text: str) -> dict[str, tuple[float, float]]:
             open_pos, close_pos = float(entry["open_pos"]), float(entry["close_pos"])
         except (KeyError, TypeError, ValueError):
             continue
-        if math.isfinite(open_pos) and math.isfinite(close_pos) and open_pos != close_pos:
+        stroke = open_pos - close_pos
+        if math.isfinite(stroke) and stroke != 0:
             ranges[side] = (open_pos, close_pos)
     return ranges
 
