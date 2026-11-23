@@ -9,8 +9,10 @@ authority issues a certificate for ``localhost``. This adapter is a client of
 that server and nothing more: it imports no Almond SDK, touches no CAN interface,
 and starts no process the server does not already manage, with one exception:
 a ``task`` run, fm-skills' task client, started in fm-skills' container while
-``ros`` mode holds the buses (see :mod:`fm_robot_agent.axol_task`). A stock Axol
-install keeps working with the agent installed beside it.
+``ros`` mode holds the buses (see :mod:`fm_robot_agent.axol_task`). The one state
+it keeps beside the server's is the lift height fm-axol's launch reads (see
+:mod:`fm_robot_agent.lift`). A stock Axol install keeps working with the agent
+installed beside it.
 
 Two things need saying about the mapping:
 
@@ -52,6 +54,7 @@ from collections.abc import Callable
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from fm_robot_agent import lift
 from fm_robot_agent.axol_ros import (
     BUS_UNITS,
     IDLE_STATES,
@@ -147,6 +150,10 @@ MOTION_KEYS = (
     "teleop.rotation_multiplier",
 )
 MOTION_PREFIXES = ("teleop.rest_pose_", "kinematics.")
+
+#: fm's own key, beside Almond's: the Ox cart lift's sticker reading in mm, kept on
+#: disk for fm-axol's launch (see :mod:`fm_robot_agent.lift`).
+LIFT_KEY = "lift.height_mm"
 
 #: The Axol has no severing class. Nothing in Almond's settings moves the network
 #: this agent's commands arrive on: the agent reaches the robot over loopback
@@ -351,7 +358,11 @@ class AxolAdapter:
     kind = KIND
 
     def __init__(
-        self, base_url: str | None = None, dataset_owner: str | None = None, ros: RosStack | None = None
+        self,
+        base_url: str | None = None,
+        dataset_owner: str | None = None,
+        ros: RosStack | None = None,
+        lift_file: Path = lift.LIFT_FILE,
     ) -> None:
         self.base_url = (base_url or os.environ.get("FM_AXOL_URL", DEFAULT_BASE_URL)).rstrip("/")
         owner = dataset_owner or os.environ.get("FM_AXOL_DATASET_OWNER", DEFAULT_DATASET_OWNER)
@@ -359,6 +370,7 @@ class AxolAdapter:
             raise AdapterError(f"dataset owner {owner!r} is not a plain name")
         self.dataset_owner = owner
         self.ros = ros or RosStack()
+        self.lift_file = lift_file
         # Each fabric query runs on its own thread, so every check that the buses
         # are free is held together with the action it guards. Reentrant because
         # `config_write` of the mode reaches `set_mode`. A stop waits out a start
@@ -522,12 +534,26 @@ class AxolAdapter:
                     help="An advanced key, guarded as motion because nobody here has read it.",
                 )
             )
+        settings.append(
+            Setting(
+                key=LIFT_KEY,
+                value=lift.read_height(self.lift_file),
+                klass=MOTION,
+                help=(
+                    f"The lift's sticker reading at the case rim, in mm: 0 fully lowered, "
+                    f"{lift.LIFT_TRAVEL_MM} fully raised. Applies when the ROS stack starts. "
+                    "None: the stored file holds no reading."
+                ),
+            )
+        )
         return settings
 
     def config_write(self, key: str, value: str) -> Outcome:
         """Write one curated setting, one advanced key, or the mode."""
         if key == MODE_ALIAS:
             return self.set_mode(value)
+        if key == LIFT_KEY:
+            return self._write_lift_height(value)
 
         snapshot = self._get("/api/settings")
         field = _curated_field(snapshot, key)
@@ -573,6 +599,36 @@ class AxolAdapter:
         an operator sees it, rather than in silence.
         """
         return Outcome(ok=False, message="the Axol journals nothing; no change is open")
+
+    @_holding_bus_lock
+    def _write_lift_height(self, value: str) -> Outcome:
+        """Store the lift's sticker reading for the next stack start.
+
+        Refused while the stack is up: the launch reads the value once, so a write
+        then would leave every transform below the lift stale without saying so.
+        Under the bus lock, so an `up` through this agent cannot start between the
+        check and the write.
+        """
+        detail = {"key": LIFT_KEY, "class": MOTION}
+        try:
+            height = lift.parse_height(value)
+        except ValueError as exc:
+            return Outcome(ok=False, message=f"{LIFT_KEY} {exc}", detail=detail)
+        if self.ros.active():
+            return Outcome(
+                ok=False,
+                message=f"{LIFT_KEY} applies when the ROS stack starts and it is up; bring it down first",
+                detail=detail,
+            )
+        try:
+            lift.write_height(self.lift_file, height)
+        except OSError as exc:
+            return Outcome(
+                ok=False,
+                message=f"{LIFT_KEY} not stored ({exc.strerror or type(exc).__name__}); run fm-axol's install.sh",
+                detail=detail,
+            )
+        return Outcome(ok=True, message=f"{LIFT_KEY}={height}", detail={**detail, "value": height})
 
     def _motion_guard(self, key: str, klass: str) -> Outcome | None:
         """Refuse a motion key while an operation runs, from the robot's own status."""

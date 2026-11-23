@@ -16,6 +16,7 @@ from fm_robot_agent import axol_task
 from fm_robot_agent.axol import (
     ALL_MODES,
     KIND,
+    LIFT_KEY,
     MODES,
     RECORD_OPERATION,
     ROS_CHECK_INTERVAL_S,
@@ -30,6 +31,7 @@ from fm_robot_agent.axol import (
 from fm_robot_agent.axol_ros import CAMERA_UNIT, CORE_UNIT, ROS_UNIT, SUDOERS_RULE
 from fm_robot_agent.axol_task import DOCKER, TASK_CLIENT, TaskRun, task_script
 from fm_robot_agent.config import MODE, MODE_ALIAS, MOTION, TUNING
+from fm_robot_agent.lift import LIFT_TRAVEL_MM
 from fm_robot_agent.protocol import AdapterError, Outcome
 
 
@@ -1091,6 +1093,59 @@ def test_a_tuning_setting_is_written_while_an_operation_runs(adapter, settings_s
     """Idle is a guard on motion, not a mood: an fps change interrupts nothing."""
     settings_server.running_op = "teleop"
     assert adapter.config_write("recording.fps", "30").ok is True
+
+
+# --- the lift height ---------------------------------------------------------
+
+
+@pytest.fixture
+def lift_adapter(server, tmp_path):
+    return AxolAdapter(base_url="http://localhost:8001", dataset_owner="axol", lift_file=tmp_path / "height_mm")
+
+
+def test_an_unset_lift_reads_fully_raised(lift_adapter, settings_server):
+    lift = settings(lift_adapter)[LIFT_KEY]
+    assert lift.value == LIFT_TRAVEL_MM
+    assert lift.klass == MOTION
+
+
+def test_a_lift_height_round_trips_through_its_file(lift_adapter, settings_server):
+    outcome = lift_adapter.config_write(LIFT_KEY, "310.5")
+    assert outcome.ok is True
+    assert lift_adapter.lift_file.read_text() == "310.5\n"
+    assert settings(lift_adapter)[LIFT_KEY].value == 310.5
+
+
+def test_a_lift_height_never_reaches_almond(lift_adapter, settings_server):
+    lift_adapter.config_write(LIFT_KEY, "310")
+    assert not any(path == "/api/settings" and method == "PUT" for method, path, _ in settings_server.requests)
+
+
+@pytest.mark.parametrize("value", ["-1", "457.3", "nan", "inf", "low", ""])
+def test_a_lift_height_outside_its_travel_is_refused(lift_adapter, settings_server, value):
+    assert lift_adapter.config_write(LIFT_KEY, value).ok is False
+    assert not lift_adapter.lift_file.exists()
+
+
+@pytest.mark.parametrize("value", ["0", "457.2"])
+def test_both_ends_of_the_travel_are_accepted(lift_adapter, settings_server, value):
+    assert lift_adapter.config_write(LIFT_KEY, value).ok is True
+
+
+def test_a_lift_height_is_refused_while_the_stack_is_up(lift_adapter, settings_server, units):
+    """The launch reads it once, so a write now would leave the transforms stale."""
+    units.states[ROS_UNIT] = "active"
+    outcome = lift_adapter.config_write(LIFT_KEY, "310")
+    assert outcome.ok is False
+    assert "bring it down first" in outcome.message
+    assert not lift_adapter.lift_file.exists()
+
+
+def test_a_lift_directory_install_never_made_is_reported(server, settings_server, tmp_path):
+    adapter = AxolAdapter(base_url="http://localhost:8001", lift_file=tmp_path / "absent" / "height_mm")
+    outcome = adapter.config_write(LIFT_KEY, "310")
+    assert outcome.ok is False
+    assert "install.sh" in outcome.message
 
 
 # --- the advanced tree -------------------------------------------------------
