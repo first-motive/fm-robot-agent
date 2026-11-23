@@ -18,6 +18,7 @@ from fm_robot_agent.axol import (
     KIND,
     LIFT_KEY,
     MODES,
+    READ_GRIPPER_CALIBRATION,
     RECORD_OPERATION,
     ROS_CHECK_INTERVAL_S,
     ROS_MODE,
@@ -27,6 +28,7 @@ from fm_robot_agent.axol import (
     _fresh,
     _stack_words,
     gripper_ranges,
+    read_gripper_ranges,
 )
 from fm_robot_agent.axol_ros import CAMERA_UNIT, CORE_UNIT, ROS_UNIT, SUDOERS_RULE
 from fm_robot_agent.axol_task import DOCKER, TASK_CLIENT, TaskRun, task_script
@@ -774,20 +776,56 @@ def test_a_calibrated_gripper_is_published_as_almonds_opening(monkeypatch):
     assert sent["positions"] == pytest.approx([0.5, 1.0])
 
 
-def test_gripper_ranges_need_both_stops(tmp_path):
+def test_gripper_ranges_need_both_stops():
     """fm-rob-02's file from before Almond measured the closed stop holds the open one only."""
-    path = tmp_path / "gripper_calibration.json"
-    path.write_text(json.dumps({
+    text = json.dumps({
         "left": {"open_pos": 1.22, "close_pos": 0.1},
         "right": {"open_pos": 1.16, "saved_at": 1788952577.8},
-    }))
-    assert gripper_ranges(path) == {"left": (1.22, 0.1)}
+    })
+    assert gripper_ranges(text) == {"left": (1.22, 0.1)}
 
 
-def test_gripper_ranges_tolerate_a_missing_or_broken_file(tmp_path):
-    assert gripper_ranges(tmp_path / "absent.json") == {}
-    (tmp_path / "broken.json").write_text("{not json")
-    assert gripper_ranges(tmp_path / "broken.json") == {}
+def test_gripper_ranges_tolerate_text_that_is_not_the_file():
+    assert gripper_ranges("") == {}
+    assert gripper_ranges("{not json") == {}
+    assert gripper_ranges("[1, 2]") == {}
+    huge = json.dumps({"left": {"open_pos": 1e308, "close_pos": -1e308}})
+    assert gripper_ranges(huge) == {}, "a stroke that overflows cannot normalise"
+
+
+def test_the_calibration_is_read_as_root_through_the_one_sudo_line(units):
+    """Almond runs as root, so its file is root's; the agent's argv is the sudoers line exactly."""
+    assert READ_GRIPPER_CALIBRATION == (
+        "/usr/bin/sudo", "-n", "/usr/bin/cat", "/root/.almond/gripper_calibration.json",
+    )
+    units.gripper_calibration = json.dumps({"right": {"open_pos": -1.0, "close_pos": 0.0}})
+    assert read_gripper_ranges() == {"right": (-1.0, 0.0)}
+    units.gripper_calibration = None
+    assert read_gripper_ranges() == {}
+
+
+def test_telemetry_publishes_calibrated_grippers_and_rereads_on_a_link_change(monkeypatch, units):
+    """Almond calibrates on enable, which the socket announces as a state message."""
+    frame = json.dumps({"type": "frame", "t": 1.0, "m": {"left:GRIPPER": [0.7, 0.0, 0.0]}})
+    patch_socket(monkeypatch, [frame, json.dumps({"type": "state", "state": "connected"}), frame])
+    units.gripper_calibration = json.dumps({"left": {"open_pos": 1.2, "close_pos": 0.2}})
+    sent = list(AxolAdapter().telemetry())
+    assert b"left:GRIPPER\x00" in sent[0][1]
+    assert units.gripper_reads == 1, "a link change inside the 5 s floor does not reread"
+
+
+def test_a_link_change_rereads_once_the_floor_has_passed(monkeypatch, units):
+    clock = iter([100.0, 106.0])
+    monkeypatch.setattr("fm_robot_agent.axol.time.time", lambda: next(clock))
+    frame = json.dumps({"type": "frame", "t": 1.0, "m": {}})
+    patch_socket(monkeypatch, [frame, json.dumps({"type": "state", "state": "connected"}), frame])
+    list(AxolAdapter().telemetry())
+    assert units.gripper_reads == 2
+
+
+def test_a_socket_message_that_is_not_an_object_is_skipped(monkeypatch, units):
+    patch_socket(monkeypatch, ["[1, 2]", "7", json.dumps({"type": "frame", "t": 1.0, "m": {}})])
+    assert len(list(AxolAdapter().telemetry())) == 1
 
 
 class SocketStub:

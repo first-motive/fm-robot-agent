@@ -346,6 +346,13 @@ refusal fails the mode start and names the rule. `is-active` stays plain
 `systemctl`. The guard covers what the agent is asked for;
 an operation started from Almond's own web UI goes around it.
 
+The same rule has one read line, `/usr/bin/cat /root/.almond/gripper_calibration.json`.
+Almond's serve runs as root and saves each gripper's measured stops there. The
+agent reads the file through that exact line when telemetry starts and on each
+link change, since Almond calibrates on enable, and then publishes `left:GRIPPER`
+and `right:GRIPPER` as Almond's 0 closed .. 1 open. A robot without the line, or
+a file holding only the open stop, publishes no gripper.
+
 `status` reports the stack in the fleet's words: `hardware` is up when it reads
 `connected` or `running`, and so is each service, and the desktop passes the
 stack only when all of them are. Whoever holds the buses is the stack:

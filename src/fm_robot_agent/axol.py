@@ -188,12 +188,25 @@ TELEMETRY_MAX_HZ = 20.0
 #:
 #: The grippers are not here: Almond normalises each against the open and
 #: closed stops it measures, which the socket does not carry. Almond saves
-#: them to ``gripper_calibration.json`` (``_GRIPPER_CALIB_PATH`` in its
-#: ``robot/axol.py``), so a gripper is published as Almond's own 0 closed .. 1
-#: open, under its motor key, once that file holds both stops for its side.
-#: A file written before Almond measured the closed stop holds the open one
-#: only, and that gripper stays out until Almond calibrates it again.
-GRIPPER_CALIBRATION_FILE = "gripper_calibration.json"
+#: them (``_GRIPPER_CALIB_PATH`` in its ``robot/axol.py``), so a gripper is
+#: published as Almond's own 0 closed .. 1 open, under its motor key, once that
+#: file holds both stops for its side. A file written before Almond measured
+#: the closed stop holds the open one only, and that gripper stays out.
+#:
+#: Almond's serve runs as root, so the file is under root's home, 0600, and
+#: rewritten on each calibration. The agent runs as the login user and reads it
+#: through the one exact ``sudo cat`` line fm-axol's sudoers rule grants; the
+#: argv here must match that line character for character.
+GRIPPER_CALIBRATION_PATH = "/root/.almond/gripper_calibration.json"
+READ_GRIPPER_CALIBRATION = ("/usr/bin/sudo", "-n", "/usr/bin/cat", GRIPPER_CALIBRATION_PATH)
+GRIPPER_READ_TIMEOUT_S = 5.0
+#: Almond calibrates on enable, which the socket announces as a link-state
+#: message, so the file is reread on each of those. While no range is known it
+#: is retried at most this often: every read is a sudo call, which logs.
+GRIPPER_RETRY_S = 30.0
+#: The floor between reads even across link changes, so a burst of state
+#: messages cannot turn into a burst of sudo calls.
+GRIPPER_MIN_REREAD_S = 5.0
 
 JOINT_FRAME_OFFSETS_DEG = {
     "left:SHOULDER_1": -90.0,
@@ -827,6 +840,8 @@ class AxolAdapter:
         ros_checked = float("-inf")
         ros_on = False
         grippers: dict[str, tuple[float, float]] = {}
+        grippers_read = float("-inf")
+        stale = True
         socket_url = f"{url}/api/telemetry/ws"
         with connect(
             socket_url, open_timeout=REQUEST_TIMEOUT_S, ssl=_ssl_context(socket_url)
@@ -836,14 +851,22 @@ class AxolAdapter:
                     frame = json.loads(message)
                 except (json.JSONDecodeError, TypeError):
                     continue
+                if not isinstance(frame, dict):
+                    continue
+                if frame.get("type") == "state":
+                    # A link change may be an enable, and an enable recalibrates.
+                    stale = True
+                    continue
                 if frame.get("type") != "frame":
                     continue
                 now = time.time()
+                since_read = now - grippers_read
+                if since_read >= GRIPPER_MIN_REREAD_S and (stale or (not grippers and since_read >= GRIPPER_RETRY_S)):
+                    grippers_read, stale = now, False
+                    grippers = read_gripper_ranges()
                 if now - ros_checked >= ROS_CHECK_INTERVAL_S:
                     ros_checked = now
                     ros_on = self.ros.active()
-                    # Reread each second: Almond rewrites the file when it calibrates.
-                    grippers = gripper_ranges()
                 if ros_on:
                     continue
                 if now - last_sent < minimum_gap_s:
@@ -1115,22 +1138,27 @@ def lerobot_v3_episodes(root: Path) -> list[dict]:
     return sorted(found, key=lambda row: row["slug"])
 
 
-def _almond_home() -> Path:
-    """Almond's state directory, as its ``almond_home`` resolves it."""
-    override = os.environ.get("ALMOND_HOME")
-    return Path(override).expanduser() if override else Path.home() / ".almond"
+def read_gripper_ranges() -> dict[str, tuple[float, float]]:
+    """Almond's gripper stops, read as root through fm-axol's sudo line; none on any failure."""
+    try:
+        done = subprocess.run(
+            READ_GRIPPER_CALIBRATION, capture_output=True, text=True, timeout=GRIPPER_READ_TIMEOUT_S, check=False
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return {}
+    return gripper_ranges(done.stdout) if done.returncode == 0 else {}
 
 
-def gripper_ranges(path: Path | None = None) -> dict[str, tuple[float, float]]:
-    """Each side's ``(open_pos, close_pos)`` in raw motor rad, from Almond's file.
+def gripper_ranges(text: str) -> dict[str, tuple[float, float]]:
+    """Each side's ``(open_pos, close_pos)`` in raw motor rad, from the file's text.
 
     A side is left out unless both stops are finite numbers and differ: an
     older file holds the open stop only, and a zero stroke cannot normalise.
-    A missing or unreadable file gives no ranges, never an error.
+    Text that is not the file's JSON gives no ranges, never an error.
     """
     try:
-        data = json.loads((path or _almond_home() / GRIPPER_CALIBRATION_FILE).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+        data = json.loads(text)
+    except ValueError:
         return {}
     ranges = {}
     for side in ("left", "right"):
@@ -1139,7 +1167,8 @@ def gripper_ranges(path: Path | None = None) -> dict[str, tuple[float, float]]:
             open_pos, close_pos = float(entry["open_pos"]), float(entry["close_pos"])
         except (KeyError, TypeError, ValueError):
             continue
-        if math.isfinite(open_pos) and math.isfinite(close_pos) and open_pos != close_pos:
+        stroke = open_pos - close_pos
+        if math.isfinite(stroke) and stroke != 0:
             ranges[side] = (open_pos, close_pos)
     return ranges
 
