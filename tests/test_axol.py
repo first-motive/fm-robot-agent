@@ -25,6 +25,7 @@ from fm_robot_agent.axol import (
     _frame_to_joint_state,
     _fresh,
     _stack_words,
+    gripper_ranges,
 )
 from fm_robot_agent.axol_ros import CAMERA_UNIT, CORE_UNIT, ROS_UNIT, SUDOERS_RULE
 from fm_robot_agent.axol_task import DOCKER, TASK_CLIENT, TaskRun, task_script
@@ -733,6 +734,33 @@ def test_a_gripper_is_left_out_without_its_calibrated_limits(monkeypatch):
     sent = _capture_joint_state(monkeypatch)
     _frame_to_joint_state({"t": 1.0, "m": {"left:GRIPPER": [1.2, 0.0, 0.0], "left:ELBOW": [0.0, 0.0, 0.0]}})
     assert sent["names"] == ["left:ELBOW"]
+
+
+def test_a_calibrated_gripper_is_published_as_almonds_opening(monkeypatch):
+    """0 closed .. 1 open, as Almond normalises it; the desktop maps that onto the URDF finger."""
+    sent = _capture_joint_state(monkeypatch)
+    grippers = {"left": (1.2, 0.2), "right": (-1.0, 0.0)}
+    _frame_to_joint_state(
+        {"t": 1.0, "m": {"left:GRIPPER": [0.7, 0.0, 0.0], "right:GRIPPER": [-2.0, 0.0, 0.0]}}, grippers
+    )
+    assert sent["names"] == ["left:GRIPPER", "right:GRIPPER"]
+    assert sent["positions"] == pytest.approx([0.5, 1.0])
+
+
+def test_gripper_ranges_need_both_stops(tmp_path):
+    """fm-rob-02's file from before Almond measured the closed stop holds the open one only."""
+    path = tmp_path / "gripper_calibration.json"
+    path.write_text(json.dumps({
+        "left": {"open_pos": 1.22, "close_pos": 0.1},
+        "right": {"open_pos": 1.16, "saved_at": 1788952577.8},
+    }))
+    assert gripper_ranges(path) == {"left": (1.22, 0.1)}
+
+
+def test_gripper_ranges_tolerate_a_missing_or_broken_file(tmp_path):
+    assert gripper_ranges(tmp_path / "absent.json") == {}
+    (tmp_path / "broken.json").write_text("{not json")
+    assert gripper_ranges(tmp_path / "broken.json") == {}
 
 
 class SocketStub:
