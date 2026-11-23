@@ -47,6 +47,11 @@ class ServerStub:
         self.motors: dict | list | None = {"left:SHOULDER_1": {"reachable": True}}
         # None answers a fresh survey on every read; a number pins it.
         self.last_ping: float | None = None
+        # Almond's stop returns at once and the op stays "stopping", which
+        # still counts as running, until its worker unwinds: this many status
+        # reads. Disconnect is refused meanwhile, as the real server refuses it.
+        self.unwind_reads = 0
+        self.stopping = 0
 
     exited_session: dict | None = None
 
@@ -58,6 +63,9 @@ class ServerStub:
             last_ping = time.time() if self.last_ping is None else self.last_ping
             return {"state": self.state, "motors": self.motors, "lastPing": last_ping}
         if path == "/api/op/status":
+            if self.stopping:
+                self.stopping -= 1
+                return {"running": True, "session": {"id": "s1", "status": "stopping"}}
             if self.running_op is not None:
                 return {"running": True, "session": {"id": "s1", "command": self.running_op}}
             return {"running": False, "session": self.exited_session}
@@ -69,11 +77,14 @@ class ServerStub:
             if self.running_op is None:
                 raise urllib.error.HTTPError(path, 404, "no operation running", None, None)
             self.running_op = None
+            self.stopping = self.unwind_reads
             return {"id": "s1"}
         if path == "/api/robot/connect":
             self.state = "connected"
             return {"state": self.state}
         if path == "/api/robot/disconnect":
+            if self.running_op is not None or self.stopping:
+                raise urllib.error.HTTPError(path, 409, "an operation owns hardware", None, None)
             self.state = "disconnected"
             return {"state": self.state}
         return {}
@@ -566,6 +577,27 @@ def test_stop_disconnects_the_motors(adapter, server):
     assert outcome.detail["state"] == "disconnected"
     assert server.running_op is None
     assert server.state == "disconnected"
+
+
+def test_stop_waits_for_the_operation_to_unwind_before_it_disconnects(adapter, server):
+    """Almond's stop returns while the op is still "stopping"; a disconnect sent
+    then was refused, and the operator saw an error for a stop that worked."""
+    adapter.set_mode("gravity-comp")
+    server.unwind_reads = 3
+    outcome = adapter.stop()
+    assert outcome.ok and outcome.detail["state"] == "disconnected"
+    assert server.paths().count("/api/robot/disconnect") == 1
+
+
+def test_an_operation_that_never_unwinds_still_fails_the_stop(adapter, server, monkeypatch):
+    """The wait is bounded: past it the disconnect goes out and its refusal is reported."""
+    import fm_robot_agent.axol as axol_module
+    monkeypatch.setattr(axol_module, "STOP_UNWIND_TIMEOUT_S", 0.05)
+    monkeypatch.setattr(axol_module, "STOP_UNWIND_POLL_S", 0.001)
+    adapter.set_mode("gravity-comp")
+    server.unwind_reads = 10_000
+    with pytest.raises(AdapterError, match="disconnect refused"):
+        adapter.stop()
 
 
 def test_a_refusing_server_surfaces_the_reason(adapter, server):

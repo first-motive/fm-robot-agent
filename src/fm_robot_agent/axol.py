@@ -206,6 +206,15 @@ ROS_CHECK_INTERVAL_S = 1.0
 
 REQUEST_TIMEOUT_S = 10.0
 
+#: How long `stop` waits for Almond's op to finish unwinding before it
+#: disconnects the link. Almond's stop returns at once with the op "stopping",
+#: which still owns the buses, and refuses a disconnect until the worker exits:
+#: up to its 6 s grace and 5 s force-kill (``_STOP_GRACE_S``, ``_FORCE_GRACE_S``
+#: in its ``serve/runner.py``). Past this the disconnect goes out anyway and its
+#: refusal reaches the caller.
+STOP_UNWIND_TIMEOUT_S = 12.0
+STOP_UNWIND_POLL_S = 0.1
+
 #: How long a mode start waits for Almond's idle link to report a fresh motor
 #: survey after the agent connected it. Almond refuses any motor operation
 #: without a connected survey under 3 s old (``_ROBOT_SURVEY_MAX_AGE_S`` in its
@@ -678,6 +687,7 @@ class AxolAdapter:
         """
         failure = self._leave_ros()
         self._stop_operation()
+        self._await_operation_end()
         answered = self._post("/api/robot/disconnect", {})
         return _halted(failure, "motors disconnected", answered)
 
@@ -889,6 +899,14 @@ class AxolAdapter:
             return self._post("/api/op/stop", {})
         except AdapterError:
             return {}
+
+    def _await_operation_end(self) -> None:
+        """Wait, bounded, until Almond reports no op running, a stopping one included."""
+        deadline = time.monotonic() + STOP_UNWIND_TIMEOUT_S
+        while time.monotonic() < deadline:
+            if not self._get("/api/op/status").get("running"):
+                return
+            time.sleep(STOP_UNWIND_POLL_S)
 
     def _start_operation(self, operation: str, args: dict) -> dict:
         """Start an Almond operation, connecting its idle link first when it is down."""
