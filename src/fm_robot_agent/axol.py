@@ -179,9 +179,15 @@ TELEMETRY_MAX_HZ = 20.0
 #: imports no Almond SDK, so they are restated here and pinned by a test against
 #: a frame read off fm-rob-02 at rest.
 #:
-#: The grippers are absent: Almond normalises them against limits it finds at
-#: runtime, which the socket does not carry, so a raw gripper angle has no
-#: joint-frame value to publish.
+#: The grippers are not here: Almond normalises each against the open and
+#: closed stops it measures, which the socket does not carry. Almond saves
+#: them to ``gripper_calibration.json`` (``_GRIPPER_CALIB_PATH`` in its
+#: ``robot/axol.py``), so a gripper is published as Almond's own 0 closed .. 1
+#: open, under its motor key, once that file holds both stops for its side.
+#: A file written before Almond measured the closed stop holds the open one
+#: only, and that gripper stays out until Almond calibrates it again.
+GRIPPER_CALIBRATION_FILE = "gripper_calibration.json"
+
 JOINT_FRAME_OFFSETS_DEG = {
     "left:SHOULDER_1": -90.0,
     "left:SHOULDER_2": 20.0,
@@ -205,6 +211,15 @@ JOINT_FRAME_OFFSETS_DEG = {
 ROS_CHECK_INTERVAL_S = 1.0
 
 REQUEST_TIMEOUT_S = 10.0
+
+#: How long `stop` waits for Almond's op to finish unwinding before it
+#: disconnects the link. Almond's stop returns at once with the op "stopping",
+#: which still owns the buses, and refuses a disconnect until the worker exits:
+#: up to its 6 s grace and 5 s force-kill (``_STOP_GRACE_S``, ``_FORCE_GRACE_S``
+#: in its ``serve/runner.py``). Past this the disconnect goes out anyway and its
+#: refusal reaches the caller.
+STOP_UNWIND_TIMEOUT_S = 12.0
+STOP_UNWIND_POLL_S = 0.1
 
 #: How long a mode start waits for Almond's idle link to report a fresh motor
 #: survey after the agent connected it. Almond refuses any motor operation
@@ -452,6 +467,8 @@ class AxolAdapter:
                     message=f"mode {config} needs {', '.join(missing)}",
                 )
         self._stop_operation()
+        # Almond refuses a start while the last op is still "stopping".
+        self._await_operation_end()
         started = self._start_operation(operation, supplied)
         return Outcome(
             ok=True,
@@ -678,6 +695,7 @@ class AxolAdapter:
         """
         failure = self._leave_ros()
         self._stop_operation()
+        self._await_operation_end()
         answered = self._post("/api/robot/disconnect", {})
         return _halted(failure, "motors disconnected", answered)
 
@@ -752,6 +770,7 @@ class AxolAdapter:
         last_sent = 0.0
         ros_checked = float("-inf")
         ros_on = False
+        grippers: dict[str, tuple[float, float]] = {}
         socket_url = f"{url}/api/telemetry/ws"
         with connect(
             socket_url, open_timeout=REQUEST_TIMEOUT_S, ssl=_ssl_context(socket_url)
@@ -767,12 +786,14 @@ class AxolAdapter:
                 if now - ros_checked >= ROS_CHECK_INTERVAL_S:
                     ros_checked = now
                     ros_on = self.ros.active()
+                    # Reread each second: Almond rewrites the file when it calibrates.
+                    grippers = gripper_ranges()
                 if ros_on:
                     continue
                 if now - last_sent < minimum_gap_s:
                     continue
                 last_sent = now
-                yield "joint_states", _frame_to_joint_state(frame)
+                yield "joint_states", _frame_to_joint_state(frame, grippers)
 
     # --- datasets ------------------------------------------------------------
 
@@ -809,6 +830,11 @@ class AxolAdapter:
             return Outcome(ok=False, message=f"mode {ROS_MODE} takes no arguments")
         if self.ros.active():
             return Outcome(ok=True, message=f"mode {ROS_MODE}", detail={"mode": ROS_MODE})
+        # An op already told to stop is waited out, so `stop` then `mode ros`
+        # is not refused for the moment Almond takes to unwind; a running op
+        # still is.
+        if self._operation_stopping():
+            self._await_operation_end()
         refusal = self._almond_refusal(f"mode {ROS_MODE}", link_too=False)
         if refusal is not None:
             return refusal
@@ -889,6 +915,19 @@ class AxolAdapter:
             return self._post("/api/op/stop", {})
         except AdapterError:
             return {}
+
+    def _operation_stopping(self) -> bool:
+        """Whether Almond's op has been told to stop and is still unwinding."""
+        session = self._get("/api/op/status").get("session") or {}
+        return isinstance(session, dict) and session.get("status") == "stopping"
+
+    def _await_operation_end(self) -> None:
+        """Wait, bounded, until Almond reports no op running, a stopping one included."""
+        deadline = time.monotonic() + STOP_UNWIND_TIMEOUT_S
+        while time.monotonic() < deadline:
+            if not self._get("/api/op/status").get("running"):
+                return
+            time.sleep(STOP_UNWIND_POLL_S)
 
     def _start_operation(self, operation: str, args: dict) -> dict:
         """Start an Almond operation, connecting its idle link first when it is down."""
@@ -1020,17 +1059,53 @@ def lerobot_v3_episodes(root: Path) -> list[dict]:
     return sorted(found, key=lambda row: row["slug"])
 
 
-def _frame_to_joint_state(frame: dict) -> bytes:
+def _almond_home() -> Path:
+    """Almond's state directory, as its ``almond_home`` resolves it."""
+    override = os.environ.get("ALMOND_HOME")
+    return Path(override).expanduser() if override else Path.home() / ".almond"
+
+
+def gripper_ranges(path: Path | None = None) -> dict[str, tuple[float, float]]:
+    """Each side's ``(open_pos, close_pos)`` in raw motor rad, from Almond's file.
+
+    A side is left out unless both stops are finite numbers and differ: an
+    older file holds the open stop only, and a zero stroke cannot normalise.
+    A missing or unreadable file gives no ranges, never an error.
+    """
+    try:
+        data = json.loads((path or _almond_home() / GRIPPER_CALIBRATION_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    ranges = {}
+    for side in ("left", "right"):
+        entry = data.get(side) if isinstance(data, dict) else None
+        try:
+            open_pos, close_pos = float(entry["open_pos"]), float(entry["close_pos"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if math.isfinite(open_pos) and math.isfinite(close_pos) and open_pos != close_pos:
+            ranges[side] = (open_pos, close_pos)
+    return ranges
+
+
+def _frame_to_joint_state(frame: dict, grippers: dict[str, tuple[float, float]] | None = None) -> bytes:
     """One Axol telemetry frame as CDR ``sensor_msgs/JointState``.
 
     The frame holds ``{"left:SHOULDER_1": [position, velocity, torque]}``, each
     position in the motor's frame; it is published in the joint frame (see
-    ``JOINT_FRAME_OFFSETS_DEG``), and a motor with no offset is left out. Motor
+    ``JOINT_FRAME_OFFSETS_DEG``), a gripper with a range in ``grippers`` as
+    Almond's 0 closed .. 1 open, and any other motor is left out. Motor
     keys are sorted so a subscriber sees a stable joint order across frames — the
     dict's own order is whatever the sampler produced.
     """
     motors = frame.get("m") or {}
-    names = sorted(name for name in motors if name in JOINT_FRAME_OFFSETS_DEG)
+    grippers = grippers or {}
+
+    def gripper_side(name: str) -> str | None:
+        side, _, motor = name.partition(":")
+        return side if motor == "GRIPPER" and side in grippers else None
+
+    names = sorted(name for name in motors if name in JOINT_FRAME_OFFSETS_DEG or gripper_side(name))
     published: list[str] = []
     positions, velocities, efforts = [], [], []
     for name in names:
@@ -1045,6 +1120,15 @@ def _frame_to_joint_state(frame: dict) -> bytes:
             continue
         values += [0.0] * (3 - len(values))
         published.append(name)
+        side = gripper_side(name)
+        if side is not None:
+            # Almond's own normalisation (``_gripper_from_raw``), clamped as it clamps.
+            open_pos, close_pos = grippers[side]
+            stroke = open_pos - close_pos
+            positions.append(min(1.0, max(0.0, (values[0] - close_pos) / stroke)))
+            velocities.append(values[1] / stroke)
+            efforts.append(values[2])
+            continue
         positions.append(values[0] + math.radians(JOINT_FRAME_OFFSETS_DEG[name]))
         velocities.append(values[1])
         efforts.append(values[2])

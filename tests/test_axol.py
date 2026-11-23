@@ -25,6 +25,7 @@ from fm_robot_agent.axol import (
     _frame_to_joint_state,
     _fresh,
     _stack_words,
+    gripper_ranges,
 )
 from fm_robot_agent.axol_ros import CAMERA_UNIT, CORE_UNIT, ROS_UNIT, SUDOERS_RULE
 from fm_robot_agent.axol_task import DOCKER, TASK_CLIENT, TaskRun, task_script
@@ -47,6 +48,11 @@ class ServerStub:
         self.motors: dict | list | None = {"left:SHOULDER_1": {"reachable": True}}
         # None answers a fresh survey on every read; a number pins it.
         self.last_ping: float | None = None
+        # Almond's stop returns at once and the op stays "stopping", which
+        # still counts as running, until its worker unwinds: this many status
+        # reads. Disconnect is refused meanwhile, as the real server refuses it.
+        self.unwind_reads = 0
+        self.stopping = 0
 
     exited_session: dict | None = None
 
@@ -58,10 +64,15 @@ class ServerStub:
             last_ping = time.time() if self.last_ping is None else self.last_ping
             return {"state": self.state, "motors": self.motors, "lastPing": last_ping}
         if path == "/api/op/status":
+            if self.stopping:
+                self.stopping -= 1
+                return {"running": True, "session": {"id": "s1", "status": "stopping"}}
             if self.running_op is not None:
                 return {"running": True, "session": {"id": "s1", "command": self.running_op}}
             return {"running": False, "session": self.exited_session}
         if path == "/api/op/start":
+            if self.running_op is not None or self.stopping:
+                raise urllib.error.HTTPError(path, 409, "an operation is already running", None, None)
             self.running_op = payload["op"]
             self.started_args = dict(payload.get("args") or {})
             return {"id": "s2", "command": self.running_op}
@@ -69,11 +80,14 @@ class ServerStub:
             if self.running_op is None:
                 raise urllib.error.HTTPError(path, 404, "no operation running", None, None)
             self.running_op = None
+            self.stopping = self.unwind_reads
             return {"id": "s1"}
         if path == "/api/robot/connect":
             self.state = "connected"
             return {"state": self.state}
         if path == "/api/robot/disconnect":
+            if self.running_op is not None or self.stopping:
+                raise urllib.error.HTTPError(path, 409, "an operation owns hardware", None, None)
             self.state = "disconnected"
             return {"state": self.state}
         return {}
@@ -568,6 +582,50 @@ def test_stop_disconnects_the_motors(adapter, server):
     assert server.state == "disconnected"
 
 
+def test_stop_waits_for_the_operation_to_unwind_before_it_disconnects(adapter, server):
+    """Almond's stop returns while the op is still "stopping"; a disconnect sent
+    then was refused, and the operator saw an error for a stop that worked."""
+    adapter.set_mode("gravity-comp")
+    server.unwind_reads = 3
+    outcome = adapter.stop()
+    assert outcome.ok and outcome.detail["state"] == "disconnected"
+    assert server.paths().count("/api/robot/disconnect") == 1
+
+
+def test_an_operation_that_never_unwinds_still_fails_the_stop(adapter, server, monkeypatch):
+    """The wait is bounded: past it the disconnect goes out and its refusal is reported."""
+    import fm_robot_agent.axol as axol_module
+    monkeypatch.setattr(axol_module, "STOP_UNWIND_TIMEOUT_S", 0.05)
+    monkeypatch.setattr(axol_module, "STOP_UNWIND_POLL_S", 0.001)
+    adapter.set_mode("gravity-comp")
+    server.unwind_reads = 10_000
+    with pytest.raises(AdapterError, match="disconnect refused"):
+        adapter.stop()
+
+
+def test_a_mode_switch_waits_for_the_last_operation_to_unwind(adapter, server):
+    """Almond refuses a start while the last op is "stopping"; the switch waits it out."""
+    adapter.set_mode("gravity-comp")
+    server.unwind_reads = 3
+    outcome = adapter.set_mode("teleop")
+    assert outcome.ok and server.running_op == MODES["teleop"]
+
+
+def test_mode_ros_waits_out_an_operation_that_is_stopping(adapter, server, units):
+    """Stop, then mode ros at once: the op still unwinding is not a reason to refuse."""
+    adapter.set_mode("gravity-comp")
+    server.unwind_reads = 3
+    adapter._stop_operation()
+    outcome = adapter.set_mode("ros")
+    assert outcome.ok, outcome.message
+
+
+def test_mode_ros_still_refuses_a_running_operation(adapter, server, units):
+    adapter.set_mode("gravity-comp")
+    outcome = adapter.set_mode("ros")
+    assert not outcome.ok and "operation is running" in outcome.message
+
+
 def test_a_refusing_server_surfaces_the_reason(adapter, server):
     server.refuse.add("/api/robot/connect")
     with pytest.raises(AdapterError):
@@ -701,6 +759,33 @@ def test_a_gripper_is_left_out_without_its_calibrated_limits(monkeypatch):
     sent = _capture_joint_state(monkeypatch)
     _frame_to_joint_state({"t": 1.0, "m": {"left:GRIPPER": [1.2, 0.0, 0.0], "left:ELBOW": [0.0, 0.0, 0.0]}})
     assert sent["names"] == ["left:ELBOW"]
+
+
+def test_a_calibrated_gripper_is_published_as_almonds_opening(monkeypatch):
+    """0 closed .. 1 open, as Almond normalises it; the desktop maps that onto the URDF finger."""
+    sent = _capture_joint_state(monkeypatch)
+    grippers = {"left": (1.2, 0.2), "right": (-1.0, 0.0)}
+    _frame_to_joint_state(
+        {"t": 1.0, "m": {"left:GRIPPER": [0.7, 0.0, 0.0], "right:GRIPPER": [-2.0, 0.0, 0.0]}}, grippers
+    )
+    assert sent["names"] == ["left:GRIPPER", "right:GRIPPER"]
+    assert sent["positions"] == pytest.approx([0.5, 1.0])
+
+
+def test_gripper_ranges_need_both_stops(tmp_path):
+    """fm-rob-02's file from before Almond measured the closed stop holds the open one only."""
+    path = tmp_path / "gripper_calibration.json"
+    path.write_text(json.dumps({
+        "left": {"open_pos": 1.22, "close_pos": 0.1},
+        "right": {"open_pos": 1.16, "saved_at": 1788952577.8},
+    }))
+    assert gripper_ranges(path) == {"left": (1.22, 0.1)}
+
+
+def test_gripper_ranges_tolerate_a_missing_or_broken_file(tmp_path):
+    assert gripper_ranges(tmp_path / "absent.json") == {}
+    (tmp_path / "broken.json").write_text("{not json")
+    assert gripper_ranges(tmp_path / "broken.json") == {}
 
 
 class SocketStub:
