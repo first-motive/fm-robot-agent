@@ -71,6 +71,8 @@ class ServerStub:
                 return {"running": True, "session": {"id": "s1", "command": self.running_op}}
             return {"running": False, "session": self.exited_session}
         if path == "/api/op/start":
+            if self.running_op is not None or self.stopping:
+                raise urllib.error.HTTPError(path, 409, "an operation is already running", None, None)
             self.running_op = payload["op"]
             self.started_args = dict(payload.get("args") or {})
             return {"id": "s2", "command": self.running_op}
@@ -599,6 +601,29 @@ def test_an_operation_that_never_unwinds_still_fails_the_stop(adapter, server, m
     server.unwind_reads = 10_000
     with pytest.raises(AdapterError, match="disconnect refused"):
         adapter.stop()
+
+
+def test_a_mode_switch_waits_for_the_last_operation_to_unwind(adapter, server):
+    """Almond refuses a start while the last op is "stopping"; the switch waits it out."""
+    adapter.set_mode("gravity-comp")
+    server.unwind_reads = 3
+    outcome = adapter.set_mode("teleop")
+    assert outcome.ok and server.running_op == MODES["teleop"]
+
+
+def test_mode_ros_waits_out_an_operation_that_is_stopping(adapter, server, units):
+    """Stop, then mode ros at once: the op still unwinding is not a reason to refuse."""
+    adapter.set_mode("gravity-comp")
+    server.unwind_reads = 3
+    adapter._stop_operation()
+    outcome = adapter.set_mode("ros")
+    assert outcome.ok, outcome.message
+
+
+def test_mode_ros_still_refuses_a_running_operation(adapter, server, units):
+    adapter.set_mode("gravity-comp")
+    outcome = adapter.set_mode("ros")
+    assert not outcome.ok and "operation is running" in outcome.message
 
 
 def test_a_refusing_server_surfaces_the_reason(adapter, server):

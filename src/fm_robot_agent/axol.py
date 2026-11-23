@@ -467,6 +467,8 @@ class AxolAdapter:
                     message=f"mode {config} needs {', '.join(missing)}",
                 )
         self._stop_operation()
+        # Almond refuses a start while the last op is still "stopping".
+        self._await_operation_end()
         started = self._start_operation(operation, supplied)
         return Outcome(
             ok=True,
@@ -828,6 +830,11 @@ class AxolAdapter:
             return Outcome(ok=False, message=f"mode {ROS_MODE} takes no arguments")
         if self.ros.active():
             return Outcome(ok=True, message=f"mode {ROS_MODE}", detail={"mode": ROS_MODE})
+        # An op already told to stop is waited out, so `stop` then `mode ros`
+        # is not refused for the moment Almond takes to unwind; a running op
+        # still is.
+        if self._operation_stopping():
+            self._await_operation_end()
         refusal = self._almond_refusal(f"mode {ROS_MODE}", link_too=False)
         if refusal is not None:
             return refusal
@@ -908,6 +915,11 @@ class AxolAdapter:
             return self._post("/api/op/stop", {})
         except AdapterError:
             return {}
+
+    def _operation_stopping(self) -> bool:
+        """Whether Almond's op has been told to stop and is still unwinding."""
+        session = self._get("/api/op/status").get("session") or {}
+        return isinstance(session, dict) and session.get("status") == "stopping"
 
     def _await_operation_end(self) -> None:
         """Wait, bounded, until Almond reports no op running, a stopping one included."""
