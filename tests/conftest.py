@@ -29,8 +29,19 @@ class SystemctlStub:
         self.fail_stop: set[str] = set()
         #: sudo's stderr for every privileged call, or ``None`` to let it through.
         self.sudo_refusal: str | None = None
+        #: Almond's gripper calibration as root's file holds it; ``None`` when absent.
+        self.gripper_calibration: str | None = None
+        self.gripper_reads = 0
 
     def run(self, argv, **_kwargs) -> subprocess.CompletedProcess:
+        from fm_robot_agent.axol import READ_GRIPPER_CALIBRATION
+
+        if tuple(argv) == READ_GRIPPER_CALIBRATION:
+            # Only this exact argv: fm-axol's sudoers line matches it and nothing else.
+            self.gripper_reads += 1
+            if self.gripper_calibration is None:
+                return subprocess.CompletedProcess(argv, 1, "", "cat: No such file or directory\n")
+            return subprocess.CompletedProcess(argv, 0, self.gripper_calibration, "")
         if argv[:2] == ["systemctl", "is-active"]:
             assert len(argv) == 3, argv
             action, unit = "is-active", argv[2]
